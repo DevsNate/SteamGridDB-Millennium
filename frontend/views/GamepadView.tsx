@@ -23,8 +23,8 @@ type ViewProps = {
 };
 
 const ASSET_LABEL: Record<SGDBAssetType, string> = {
-  grid_p: 'CAPSULE',
-  grid_l: 'WIDE CAPSULE',
+  grid_p: 'GRID',
+  grid_l: 'WIDE GRID',
   hero: 'HERO',
   logo: 'LOGO',
   icon: 'ICON',

@@ -78,8 +78,8 @@ const ASSET_TYPE: Record<SGDBAssetType, number> = {
 };
 
 export const ASSET_LABEL: Record<SGDBAssetType, string> = {
-  grid_p: 'Capsule',
-  grid_l: 'Wide Capsule',
+  grid_p: 'Grid',
+  grid_l: 'Wide Grid',
   hero: 'Hero',
   logo: 'Logo',
   icon: 'Icon',
