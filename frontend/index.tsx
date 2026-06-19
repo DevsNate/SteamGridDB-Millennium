@@ -13,16 +13,18 @@ import {
   Millennium,
   Navigation,
   routerHook,
+  showModal,
   toaster,
   useParams,
 } from '@steambrew/client';
-import { FC, useCallback, useEffect, useMemo, useState } from 'react';
+import { Dispatch, FC, SetStateAction, useCallback, useEffect, useMemo, useState } from 'react';
 import { GamepadView } from './views/GamepadView';
 
 declare const SteamClient: {
   Apps: {
     ClearCustomArtworkForApp(appid: number, assetType: number): Promise<void>;
     SetCustomArtworkForApp(appid: number, data: string, extension: string, assetType: number): Promise<void>;
+    SetCustomLogoPositionForApp?(appid: number, position: { pinnedPosition: string; nWidthPct: number; nHeightPct: number }): Promise<void>;
   };
   UI: {
     GetUIMode(): Promise<EUIMode>;
@@ -58,6 +60,11 @@ export type FilterState = {
   epilepsy: boolean;
 };
 export type ZoomState = Record<SGDBAssetType, number>;
+type PluginSettings = {
+  filterDefaults: FilterState;
+  showExternalLinks: boolean;
+  preloadPages: number;
+};
 
 type SGDBResponse<T> = {
   success: boolean;
@@ -65,9 +72,25 @@ type SGDBResponse<T> = {
   errors?: string[];
 };
 
+type SGDBGame = {
+  id: number;
+  name: string;
+};
+
+export type CurrentArtworkItem = {
+  path: string;
+  modified?: string;
+  length?: number;
+};
+
+export type CurrentArtworkState = Partial<Record<SGDBAssetType, CurrentArtworkItem>>;
+
 const sgdbRequest = callable<[{ path: string }], string | false>('sgdb_request');
 const downloadAsBase64 = callable<[{ url: string }], string | false>('download_as_base64');
 const setSteamIconFromUrl = callable<[{ appid: number; url: string }], string | false>('set_steam_icon_from_url');
+const setAnimatedArtworkFromUrl = callable<[{ appid: number; asset_type: SGDBAssetType; url: string; extension: string }], string | false>('set_animated_artwork_from_url');
+const getCurrentArtwork = callable<[{ appid: number }], string | false>('get_current_artwork');
+const openExternalUrl = callable<[{ url: string }], boolean>('open_external_url');
 
 const ASSET_TYPE: Record<SGDBAssetType, number> = {
   grid_p: 0,
@@ -91,6 +114,14 @@ const ASSET_ENDPOINT: Record<SGDBAssetType, string> = {
   hero: 'heroes',
   logo: 'logos',
   icon: 'icons',
+};
+
+const ASSET_PAGE_PATH: Record<SGDBAssetType, string> = {
+  grid_p: 'grid',
+  grid_l: 'grid',
+  hero: 'hero',
+  logo: 'logo',
+  icon: 'icon',
 };
 
 const DEFAULT_DIMENSIONS: Record<SGDBAssetType, string[]> = {
@@ -159,6 +190,12 @@ const defaultFilters: FilterState = {
   epilepsy: true,
 };
 
+const defaultSettings: PluginSettings = {
+  filterDefaults: defaultFilters,
+  showExternalLinks: true,
+  preloadPages: 0,
+};
+
 const defaultZoom: ZoomState = {
   grid_p: 180,
   grid_l: 395,
@@ -170,6 +207,67 @@ const defaultZoom: ZoomState = {
 const gamepadDefaultZoom: ZoomState = {
   ...defaultZoom,
   grid_l: 315,
+};
+
+type ZoomModeState = {
+  desktop: ZoomState;
+  gamepad: ZoomState;
+};
+
+const ZOOM_STORAGE_KEY = 'steamgriddb:zoomByMode:v1';
+const SETTINGS_STORAGE_KEY = 'steamgriddb:settings:v1';
+
+const isZoomState = (value: unknown): value is ZoomState => {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  return tabs.every((tab) => typeof (value as Partial<ZoomState>)[tab] === 'number');
+};
+
+const loadZoomByMode = (): ZoomModeState => {
+  const fallback = {
+    desktop: defaultZoom,
+    gamepad: gamepadDefaultZoom,
+  };
+
+  try {
+    const raw = window.localStorage.getItem(ZOOM_STORAGE_KEY);
+    if (!raw) {
+      return fallback;
+    }
+
+    const saved = JSON.parse(raw) as Partial<ZoomModeState>;
+    return {
+      desktop: isZoomState(saved.desktop) ? { ...defaultZoom, ...saved.desktop } : fallback.desktop,
+      gamepad: isZoomState(saved.gamepad) ? { ...gamepadDefaultZoom, ...saved.gamepad } : fallback.gamepad,
+    };
+  } catch {
+    return fallback;
+  }
+};
+
+const isFilterState = (value: unknown): value is FilterState => {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  return (['static', 'animated', 'adult', 'humor', 'epilepsy'] as (keyof FilterState)[]).every((key) => typeof (value as Partial<FilterState>)[key] === 'boolean');
+};
+
+const normalizeSettings = (settings: Partial<PluginSettings>): PluginSettings => ({
+  filterDefaults: isFilterState(settings.filterDefaults) ? { ...defaultFilters, ...settings.filterDefaults } : defaultSettings.filterDefaults,
+  showExternalLinks: typeof settings.showExternalLinks === 'boolean' ? settings.showExternalLinks : defaultSettings.showExternalLinks,
+  preloadPages: Math.max(0, Math.min(5, Number.isFinite(settings.preloadPages) ? Math.trunc(settings.preloadPages as number) : defaultSettings.preloadPages)),
+});
+
+const loadPluginSettings = (): PluginSettings => {
+  try {
+    const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
+    return raw ? normalizeSettings(JSON.parse(raw) as Partial<PluginSettings>) : defaultSettings;
+  } catch {
+    return defaultSettings;
+  }
 };
 
 function parseResponse<T>(body: string | false): T {
@@ -204,8 +302,54 @@ function buildAssetQuery(assetType: SGDBAssetType, page: number, filters: Filter
   return params.toString();
 }
 
+const filterReturnedAssets = (assets: SGDBAsset[], filters: FilterState) =>
+  assets.filter((asset) => {
+    if (!filters.adult && asset.nsfw) return false;
+    if (!filters.humor && asset.humor) return false;
+    if (!filters.epilepsy && asset.epilepsy) return false;
+    if (!filters.static && !isAnimatedAsset(asset.url) && !isAnimatedAsset(asset.thumb)) return false;
+    if (!filters.animated && (isAnimatedAsset(asset.url) || isAnimatedAsset(asset.thumb))) return false;
+    return true;
+  });
+
 async function apiGet<T>(path: string): Promise<T> {
   return parseResponse<T>(await sgdbRequest({ path }));
+}
+
+const getSteamAppName = (appId: number) => {
+  try {
+    const overview = window.appStore?.GetAppOverviewByAppID(appId) as { display_name?: string; displayName?: string; name?: string } | null | undefined;
+    return overview?.display_name || overview?.displayName || overview?.name || '';
+  } catch {
+    return '';
+  }
+};
+
+const setDefaultLogoPosition = async (appId: number) => {
+  const position = { pinnedPosition: 'BottomLeft', nWidthPct: 50, nHeightPct: 50 } as const;
+  try {
+    if (SteamClient.Apps.SetCustomLogoPositionForApp) {
+      await SteamClient.Apps.SetCustomLogoPositionForApp(appId, position);
+      return;
+    }
+
+    const overview = window.appStore?.GetAppOverviewByAppID(appId);
+    if (overview && window.appDetailsStore?.SaveCustomLogoPosition) {
+      await window.appDetailsStore.SaveCustomLogoPosition(overview as Parameters<typeof window.appDetailsStore.SaveCustomLogoPosition>[0], position);
+    }
+  } catch {
+    // Logo positioning should never make a successful artwork apply fail.
+  }
+};
+
+async function resolveSteamGridDBGameId(appId: number): Promise<number | null> {
+  const appName = getSteamAppName(appId).trim();
+  if (!appName) {
+    return null;
+  }
+
+  const games = await apiGet<SGDBGame[]>(`/search/autocomplete/${encodeURIComponent(encodeURIComponent(appName))}`);
+  return games[0]?.id ?? null;
 }
 
 const notice = (title: string, body: string) => {
@@ -219,6 +363,46 @@ const notice = (title: string, body: string) => {
 
 export const isAnimatedAsset = (src: string) => /\.(webm|mp4)(\?|$)/i.test(src);
 
+type DownloadedAsset = {
+  data: string;
+  byteLength?: number;
+};
+
+const getAssetExtension = (asset: SGDBAsset) => {
+  const source = asset.url || asset.thumb || '';
+  const match = source.match(/\.([a-z0-9]+)(?:\?|$)/i);
+  const extension = match?.[1]?.toLowerCase();
+  if (extension === 'webm' || extension === 'mp4' || extension === 'webp' || extension === 'jpg' || extension === 'jpeg') {
+    return extension;
+  }
+  return 'png';
+};
+
+const isDirectAnimatedExtension = (extension: string) => extension === 'webm' || extension === 'mp4';
+
+const arrayBufferToBase64 = (buffer: ArrayBuffer) => {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = '';
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(index, index + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return window.btoa(binary);
+};
+
+const downloadAssetInBrowser = async (url: string): Promise<DownloadedAsset> => {
+  const response = await fetch(url, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Download failed with HTTP ${response.status}.`);
+  }
+  const buffer = await response.arrayBuffer();
+  return {
+    data: arrayBufferToBase64(buffer),
+    byteLength: buffer.byteLength,
+  };
+};
+
 export const assetGridStyle = (assetType: SGDBAssetType, zoom: number) => {
   if (assetType === 'hero' || assetType === 'logo') {
     const columns = Math.max(2, Math.min(6, zoom));
@@ -228,24 +412,123 @@ export const assetGridStyle = (assetType: SGDBAssetType, zoom: number) => {
   return { ['--asset-size' as string]: `${zoom}px` };
 };
 
-const SteamGridDBContent = ({ initialAppId, initialAssetType }: { initialAppId?: string; initialAssetType?: SGDBAssetType }) => {
+const SettingsView = ({
+  settings,
+  setSettings,
+}: {
+  settings: PluginSettings;
+  setSettings: Dispatch<SetStateAction<PluginSettings>>;
+}) => {
+  const updateFilterDefault = (key: keyof FilterState) => {
+    setSettings((current) => {
+      const nextFilters = {
+        ...current.filterDefaults,
+        [key]: !current.filterDefaults[key],
+      };
+      if (!nextFilters.static && !nextFilters.animated) {
+        nextFilters[key] = true;
+      }
+      return {
+        ...current,
+        filterDefaults: nextFilters,
+      };
+    });
+  };
+
+  return (
+    <div className="sgdbSettingsPage">
+      <section className="sgdbSettingsSection">
+        <h2>Filter Defaults</h2>
+        <div className="sgdbSettingsToggleGrid">
+          {([
+            ['static', 'Static'],
+            ['animated', 'Animated'],
+            ['adult', 'Adult'],
+            ['humor', 'Humor'],
+            ['epilepsy', 'Epilepsy'],
+          ] as [keyof FilterState, string][]).map(([key, label]) => (
+            <button
+              key={key}
+              className={`sgdbSettingsPill sgdbTextPill ${settings.filterDefaults[key] ? 'selected' : ''}`}
+              type="button"
+              onClick={() => updateFilterDefault(key)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="sgdbSettingsSection">
+        <h2>Artwork Browser</h2>
+        <label className="sgdbSettingsRow">
+          <span>SteamGridDB link button</span>
+          <input
+            type="checkbox"
+            checked={settings.showExternalLinks}
+            onChange={(event) => {
+              const showExternalLinks = event.currentTarget.checked;
+              setSettings((current) => ({ ...current, showExternalLinks }));
+            }}
+          />
+        </label>
+        <label className="sgdbSettingsRow">
+          <span>Additional pages to preload</span>
+          <input
+            type="number"
+            min={0}
+            max={5}
+            step={1}
+            value={settings.preloadPages}
+            onChange={(event) => {
+              const preloadPages = Math.max(0, Math.min(5, Number.parseInt(event.currentTarget.value || '0', 10)));
+              setSettings((current) => ({ ...current, preloadPages }));
+            }}
+          />
+        </label>
+      </section>
+    </div>
+  );
+};
+
+const SteamGridDBContent = ({ initialAppId, initialAssetType, popout = false }: { initialAppId?: string; initialAssetType?: SGDBAssetType; popout?: boolean }) => {
+  const [settings, setSettings] = useState<PluginSettings>(() => loadPluginSettings());
   const [appIdText, setAppIdText] = useState(initialAppId ?? '');
   const [assetType, setAssetType] = useState<SGDBAssetType>('grid_p');
   const [assetsByType, setAssetsByType] = useState<AssetState>(() => emptyAssets());
   const [pagesByType, setPagesByType] = useState<PageState>(() => emptyPages());
   const [loadingByType, setLoadingByType] = useState<LoadingState>(() => emptyLoading());
   const [endReachedByType, setEndReachedByType] = useState<EndState>(() => emptyEnd());
-  const [filters, setFilters] = useState<FilterState>(defaultFilters);
-  const [zoomByType, setZoomByType] = useState<ZoomState>(defaultZoom);
+  const [filters, setFilters] = useState<FilterState>(() => settings.filterDefaults);
+  const [zoomByMode, setZoomByMode] = useState<ZoomModeState>(() => loadZoomByMode());
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [applyingId, setApplyingId] = useState<number | null>(null);
   const [uiMode, setUiMode] = useState<EUIMode>(EUIMode.Desktop);
+  const [sgdbGameId, setSgdbGameId] = useState<number | null>(null);
+  const [currentArtwork, setCurrentArtwork] = useState<CurrentArtworkState>({});
   const appId = useMemo(() => Number.parseInt(appIdText, 10), [appIdText]);
   const isGamepadUI = uiMode === EUIMode.GamePad;
+  const zoomModeKey = isGamepadUI ? 'gamepad' : 'desktop';
+  const zoomByType = zoomByMode[zoomModeKey];
 
   useEffect(() => {
-    setZoomByType(isGamepadUI ? gamepadDefaultZoom : defaultZoom);
-  }, [isGamepadUI]);
+    window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  }, [settings]);
+
+  useEffect(() => {
+    window.localStorage.setItem(ZOOM_STORAGE_KEY, JSON.stringify(zoomByMode));
+  }, [zoomByMode]);
+
+  const setZoomByType = useCallback<Dispatch<SetStateAction<ZoomState>>>((action) => {
+    setZoomByMode((current) => {
+      const currentZoom = current[zoomModeKey];
+      const nextZoom = typeof action === 'function' ? action(currentZoom) : action;
+      return {
+        ...current,
+        [zoomModeKey]: nextZoom,
+      };
+    });
+  }, [zoomModeKey]);
 
   useEffect(() => {
     if (initialAppId) {
@@ -253,6 +536,7 @@ const SteamGridDBContent = ({ initialAppId, initialAssetType }: { initialAppId?:
       setAssetsByType(emptyAssets());
       setPagesByType(emptyPages());
       setEndReachedByType(emptyEnd());
+      setSgdbGameId(null);
     }
   }, [initialAppId]);
 
@@ -287,17 +571,64 @@ const SteamGridDBContent = ({ initialAppId, initialAssetType }: { initialAppId?:
     setLoadingByType((current) => ({ ...current, [type]: true }));
     try {
       const endpoint = ASSET_ENDPOINT[type];
-      const query = buildAssetQuery(type, nextPage, filters);
-      const result = await apiGet<SGDBAsset[]>(`/${endpoint}/steam/${appId}?${query}`);
-      setAssetsByType((current) => ({ ...current, [type]: append ? [...current[type], ...result] : result }));
-      setPagesByType((current) => ({ ...current, [type]: nextPage }));
-      setEndReachedByType((current) => ({ ...current, [type]: result.length === 0 }));
+      const lastPageToLoad = nextPage === 0 && !append ? nextPage + settings.preloadPages : nextPage;
+      let loadedAssets: SGDBAsset[] = [];
+      let lastLoadedPage = nextPage;
+      let reachedEnd = false;
+      let resolvedGameId = sgdbGameId;
+
+      for (let page = nextPage; page <= lastPageToLoad; page += 1) {
+        const query = buildAssetQuery(type, page, filters);
+        let result: SGDBAsset[];
+        try {
+          result = await apiGet<SGDBAsset[]>(`/${endpoint}/${resolvedGameId ? 'game' : 'steam'}/${resolvedGameId ?? appId}?${query}`);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (resolvedGameId || !/game not found/i.test(message)) {
+            throw err;
+          }
+
+          resolvedGameId = await resolveSteamGridDBGameId(appId);
+          if (!resolvedGameId) {
+            throw err;
+          }
+
+          setSgdbGameId(resolvedGameId);
+          result = await apiGet<SGDBAsset[]>(`/${endpoint}/game/${resolvedGameId}?${query}`);
+        }
+
+        loadedAssets = [...loadedAssets, ...filterReturnedAssets(result, filters)];
+        lastLoadedPage = page;
+        if (result.length === 0) {
+          reachedEnd = true;
+          break;
+        }
+      }
+
+      setAssetsByType((current) => ({ ...current, [type]: append ? [...current[type], ...loadedAssets] : loadedAssets }));
+      setPagesByType((current) => ({ ...current, [type]: lastLoadedPage }));
+      setEndReachedByType((current) => ({ ...current, [type]: reachedEnd }));
     } catch (err) {
+      setEndReachedByType((current) => ({ ...current, [type]: true }));
       notice('SteamGridDB Assets Failed', err instanceof Error ? err.message : String(err));
     } finally {
       setLoadingByType((current) => ({ ...current, [type]: false }));
     }
-  }, [appId, endReachedByType, filters, loadingByType]);
+  }, [appId, endReachedByType, filters, loadingByType, settings.preloadPages, sgdbGameId]);
+
+  const refreshCurrentArtwork = useCallback(async () => {
+    if (!Number.isFinite(appId)) {
+      setCurrentArtwork({});
+      return;
+    }
+
+    try {
+      const body = await getCurrentArtwork({ appid: appId });
+      setCurrentArtwork(body ? JSON.parse(body) as CurrentArtworkState : {});
+    } catch {
+      setCurrentArtwork({});
+    }
+  }, [appId]);
 
   useEffect(() => {
     if (!Number.isFinite(appId)) return;
@@ -306,10 +637,15 @@ const SteamGridDBContent = ({ initialAppId, initialAssetType }: { initialAppId?:
   }, [appId, assetType, assetsByType, endReachedByType, loadAssets, loadingByType]);
 
   useEffect(() => {
+    void refreshCurrentArtwork();
+  }, [refreshCurrentArtwork]);
+
+  useEffect(() => {
     if (isGamepadUI || !Number.isFinite(appId)) return;
+    if (settings.preloadPages > 0) return;
     if (pagesByType[assetType] !== 0 || assetsByType[assetType].length < 45 || loadingByType[assetType] || endReachedByType[assetType]) return;
     void loadAssets(assetType, 1, true);
-  }, [appId, assetType, assetsByType, endReachedByType, isGamepadUI, loadAssets, loadingByType, pagesByType]);
+  }, [appId, assetType, assetsByType, endReachedByType, isGamepadUI, loadAssets, loadingByType, pagesByType, settings.preloadPages]);
 
   const resetCurrentTab = useCallback(() => {
     setAssetsByType((current) => ({ ...current, [assetType]: [] }));
@@ -347,23 +683,82 @@ const SteamGridDBContent = ({ initialAppId, initialAssetType }: { initialAppId?:
           throw new Error('The icon could not be written to Steam library cache.');
         }
         notice('Icon Saved', 'Restart Steam if the icon does not refresh immediately.');
+        void refreshCurrentArtwork();
         return;
       }
 
-      const image = await downloadAsBase64({ url: asset.url });
-      if (!image) {
+      const extension = getAssetExtension(asset);
+      const shouldDirectWriteAnimated = isAnimatedAsset(asset.thumb) || isDirectAnimatedExtension(extension);
+      if (shouldDirectWriteAnimated) {
+        const savedPath = await setAnimatedArtworkFromUrl({
+          appid: appId,
+          asset_type: type,
+          url: asset.url,
+          extension,
+        });
+        if (!savedPath) {
+          throw new Error('The animated asset could not be written directly to Steam grid cache.');
+        }
+        if (type === 'logo') {
+          await setDefaultLogoPosition(appId);
+        }
+        notice('Animated Artwork Saved', `${ASSET_LABEL[type]} was saved directly. Restart Steam if it does not refresh immediately.`);
+        void refreshCurrentArtwork();
+        return;
+      }
+
+      const downloaded: DownloadedAsset | false = await downloadAssetInBrowser(asset.url).catch(async () => {
+        const data = await downloadAsBase64({ url: asset.url });
+        return data ? ({ data } as DownloadedAsset) : false;
+      });
+      if (!downloaded) {
         throw new Error('The selected image could not be downloaded.');
       }
 
-      await SteamClient.Apps.ClearCustomArtworkForApp(appId, ASSET_TYPE[type]);
-      await SteamClient.Apps.SetCustomArtworkForApp(appId, image, 'png', ASSET_TYPE[type]);
+      await SteamClient.Apps.SetCustomArtworkForApp(appId, downloaded.data, extension, ASSET_TYPE[type]);
+      if (type === 'logo') {
+        await setDefaultLogoPosition(appId);
+      }
       notice('Artwork Applied', `${ASSET_LABEL[type]} was applied to ${appId}.`);
+      void refreshCurrentArtwork();
     } catch (err) {
       notice('Apply Failed', err instanceof Error ? err.message : String(err));
     } finally {
       setApplyingId(null);
     }
-  }, [appId]);
+  }, [appId, refreshCurrentArtwork]);
+
+  const resetArtwork = useCallback(async (type: SGDBAssetType) => {
+    if (!Number.isFinite(appId)) {
+      notice('Missing Steam App ID', 'Enter the Steam app id to reset artwork.');
+      return;
+    }
+
+    if (type === 'icon') {
+      notice('Icon Reset Not Available', 'Steam icon reset needs a separate cache restore path.');
+      return;
+    }
+
+    try {
+      await SteamClient.Apps.ClearCustomArtworkForApp(appId, ASSET_TYPE[type]);
+      notice('Artwork Reset', `${ASSET_LABEL[type]} was reset to default.`);
+      void refreshCurrentArtwork();
+    } catch (err) {
+      notice('Reset Failed', err instanceof Error ? err.message : String(err));
+    }
+  }, [appId, refreshCurrentArtwork]);
+
+  const openAssetPage = useCallback(async (asset: SGDBAsset, type: SGDBAssetType) => {
+    const url = `https://www.steamgriddb.com/${ASSET_PAGE_PATH[type]}/${asset.id}`;
+    try {
+      const opened = await openExternalUrl({ url });
+      if (!opened) {
+        throw new Error('The browser could not be opened.');
+      }
+    } catch (err) {
+      notice('Open Failed', err instanceof Error ? err.message : String(err));
+    }
+  }, []);
 
   const viewProps = {
     assetType,
@@ -375,20 +770,26 @@ const SteamGridDBContent = ({ initialAppId, initialAssetType }: { initialAppId?:
     filters,
     toggleFilter,
     zoomByType,
+    zoomDefaults: isGamepadUI ? gamepadDefaultZoom : defaultZoom,
     setZoomByType,
     filtersOpen,
     setFiltersOpen,
     applyingId,
     applyAsset,
+    openAssetPage,
+    showExternalLinks: settings.showExternalLinks,
     loadAssets,
     resetCurrentTab,
+    resetArtwork,
     isGamepadUI,
+    currentArtwork,
+    refreshCurrentArtwork,
   };
 
   return (
-    <div className={`sgdbRoot sgdbGamepad ${isGamepadUI ? '' : 'sgdbDesktopToolbar'}`} id="sgdb-wrap">
+    <div className={`sgdbRoot sgdbGamepad ${isGamepadUI ? '' : 'sgdbDesktopToolbar'} ${popout ? 'sgdbPopoutContent' : ''}`} id="sgdb-wrap">
       <style>{styles}</style>
-      <GamepadView {...viewProps} />
+      {initialAppId ? <GamepadView {...viewProps} /> : <SettingsView settings={settings} setSettings={setSettings} />}
     </div>
   );
 };
@@ -405,6 +806,22 @@ function openSteamGridDB() {
 }
 
 Millennium?.exposeObj?.({ openSteamGridDB });
+
+const openSteamGridDBForApp = async (appid: number) => {
+  const mode = await SteamClient.UI.GetUIMode().catch(() => EUIMode.Desktop);
+  if (mode === EUIMode.GamePad) {
+    Navigation.Navigate(`/steamgriddb/${appid}`);
+    return;
+  }
+
+  showModal(<SteamGridDBContent initialAppId={String(appid)} popout />, window, {
+    strTitle: 'SteamGridDB',
+    bHideMainWindowForPopouts: false,
+    bForcePopOut: true,
+    popupHeight: 760,
+    popupWidth: 1500,
+  });
+};
 
 const spliceArtworkItem = (children: any[], appid: number) => {
   if (!Array.isArray(children) || !appid) {
@@ -425,7 +842,7 @@ const spliceArtworkItem = (children: any[], appid: number) => {
     <MenuItem
       key="sgdb-change-artwork"
       onSelected={() => {
-        Navigation.Navigate(`/steamgriddb/${appid}`);
+        void openSteamGridDBForApp(appid);
       }}
     >
       Change Artwork...
@@ -580,6 +997,58 @@ const styles = `
   box-shadow: 0 calc(-1 * var(--basicui-header-height, 40px)) 0 #15222c;
 }
 
+.sgdbPopoutContent {
+  height: 100vh;
+  margin-top: 0;
+  padding-right: 8px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  box-shadow: none;
+}
+
+.sgdbPopoutContent::-webkit-scrollbar {
+  width: 10px;
+}
+
+.sgdbPopoutContent::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sgdbPopoutContent::-webkit-scrollbar-thumb {
+  min-height: 48px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: rgba(139, 153, 170, 0.28);
+  background-clip: padding-box;
+}
+
+.sgdbPopoutContent:hover::-webkit-scrollbar-thumb {
+  background: rgba(139, 153, 170, 0.62);
+  background-clip: padding-box;
+}
+
+.sgdbPopoutContent::-webkit-scrollbar-thumb:hover {
+  background: rgba(191, 202, 215, 0.78);
+  background-clip: padding-box;
+}
+
+body:has(#sgdb-wrap) button[aria-label="Close"],
+body:has(#sgdb-wrap) button[title="Close"],
+body:has(#sgdb-wrap) [class*="CloseButton"],
+body:has(#sgdb-wrap) [class*="closeButton"] {
+  color: #8b98a5 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+body:has(#sgdb-wrap) button[aria-label="Close"]:hover,
+body:has(#sgdb-wrap) button[title="Close"]:hover,
+body:has(#sgdb-wrap) [class*="CloseButton"]:hover,
+body:has(#sgdb-wrap) [class*="closeButton"]:hover {
+  color: #dfe3ea !important;
+  background: rgba(255, 255, 255, 0.06) !important;
+}
+
 .sgdbManualTabs {
   display: flex;
   align-items: center;
@@ -691,6 +1160,68 @@ const styles = `
   pointer-events: none;
 }
 
+.sgdbSettingsPage {
+  width: min(680px, calc(100% - 48px));
+  margin: 24px auto;
+  color: #dfe3ea;
+}
+
+.sgdbSettingsSection {
+  padding: 18px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.sgdbSettingsSection h2 {
+  margin: 0 0 14px;
+  color: #f1f5f9;
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: 0.8px;
+}
+
+.sgdbSettingsToggleGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.sgdbSettingsPill {
+  width: auto;
+  min-width: 108px;
+  height: 34px;
+  padding: 0 18px;
+  font-size: 13px;
+  letter-spacing: 0.9px;
+}
+
+.sgdbSettingsRow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 20px;
+  min-height: 42px;
+  color: #dfe3ea;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.sgdbSettingsRow input[type="checkbox"] {
+  width: 22px;
+  height: 22px;
+}
+
+.sgdbSettingsRow input[type="number"] {
+  width: 72px;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+  color: #f1f5f9;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 15px;
+  font-weight: 700;
+}
+
 .tabcontents-wrap {
   display: flex;
   flex-direction: column;
@@ -753,26 +1284,32 @@ const styles = `
 
 .sgdbGamepad .sgdb-asset-toolbar {
   display: grid;
-  grid-template-columns: 144px 1fr;
+  grid-template-columns: 180px 1fr 104px;
   align-items: center;
   gap: 28px;
-  min-height: 48px;
+  min-height: 68px;
   padding: 0 36px;
   background: #060a10;
   border-bottom: 1px solid rgba(102, 192, 244, 0.08);
 }
 
 .sgdbGamepad .sgdb-asset-toolbar .filter-buttons {
-  width: 144px;
+  width: 180px;
 }
 
 .sgdbGamepad .sgdbFilterMainButton {
-  width: 144px;
-  height: 34px;
-  min-width: 144px;
+  width: 180px;
+  height: 48px;
+  min-width: 180px;
   padding: 0;
-  font-size: 13px;
+  border-radius: 999px;
+  font-size: 15px;
   letter-spacing: 1.2px;
+}
+
+.sgdbSliderWithMarks {
+  position: relative;
+  min-width: 0;
 }
 
 .sgdbGamepad .sgdb-asset-toolbar .size-slider {
@@ -783,6 +1320,21 @@ const styles = `
   background: transparent !important;
   box-shadow: none !important;
   outline: none !important;
+}
+
+.sgdbResetButton {
+  display: grid;
+  place-items: center;
+  height: 48px;
+  min-width: 104px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 999px;
+  font-size: 15px;
+  font-weight: 900;
+  letter-spacing: 1.1px;
+  text-transform: uppercase;
+  cursor: pointer;
 }
 
 .sgdbFilterTray {
@@ -850,7 +1402,7 @@ const styles = `
 
 .sgdbGamepad .sgdbFilterToggle {
   flex: 1;
-  height: 34px;
+  height: 38px;
   min-width: 0;
   padding: 0 12px;
   font-size: 13px;
@@ -918,6 +1470,7 @@ const styles = `
   width: 100%;
   margin-top: auto;
   overflow: hidden;
+  container-type: size;
   background: url('/images/defaultappimage.png') center center / cover, #05070a;
   cursor: pointer;
   outline: 2px solid transparent;
@@ -939,6 +1492,144 @@ const styles = `
   z-index: 4;
   outline-color: rgba(255, 255, 255, 0.55);
   transform: scale(1.018);
+}
+
+.sgdbManageGrid {
+  display: grid;
+  grid-template-columns: minmax(220px, 30%) minmax(0, 1fr);
+  grid-auto-flow: dense;
+  gap: 22px;
+  width: 100%;
+  padding: 24px 36px calc(var(--gamepadui-current-footer-height, 34px) + 16px);
+  box-sizing: border-box;
+}
+
+.sgdbManagePanel {
+  min-width: 0;
+}
+
+.sgdbManagePanel h2 {
+  margin: 0 0 10px;
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 19px;
+  font-weight: 900;
+  letter-spacing: 2.4px;
+  text-transform: uppercase;
+}
+
+.sgdbManagePanelCapsule {
+  grid-row: span 3;
+}
+
+.sgdbManagePanelWide,
+.sgdbManagePanelHero,
+.sgdbManagePanelLogo {
+  grid-column: 2;
+}
+
+.sgdbManagePanelIcon {
+  grid-column: 1;
+}
+
+.sgdbManagePreview {
+  position: relative;
+  overflow: hidden;
+  background: #070d14;
+  outline: 2px solid rgba(142, 158, 176, 0.55);
+}
+
+.sgdbManagePreview.type-grid_p {
+  aspect-ratio: 2 / 3;
+  max-height: 68vh;
+}
+
+.sgdbManagePreview.type-grid_l,
+.sgdbManagePreview.type-hero {
+  aspect-ratio: 92 / 43;
+}
+
+.sgdbManagePreview.type-logo {
+  height: 150px;
+}
+
+.sgdbManagePreview.type-icon {
+  width: 130px;
+  aspect-ratio: 1 / 1;
+}
+
+.sgdbManageMissing {
+  display: grid;
+  place-items: center;
+  min-height: 140px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #8f98a8;
+  background: rgba(0, 0, 0, 0.18);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.sgdbExternalLinkButton {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  width: clamp(23px, 13cqw, 38px);
+  height: clamp(23px, 13cqw, 38px);
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.58);
+  border-left-width: 0;
+  border-bottom-width: 0;
+  border-radius: 0 clamp(3px, 2.4cqw, 5px) 0 0;
+  color: rgba(255, 255, 255, 0.94);
+  background: rgba(7, 10, 15, 0.86);
+  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.24);
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 120ms ease, transform 120ms ease, background 120ms ease;
+}
+
+.image-wrap.sgdbAsset.type-grid_l .sgdbExternalLinkButton,
+.image-wrap.sgdbAsset.type-hero .sgdbExternalLinkButton,
+.image-wrap.sgdbAsset.type-logo .sgdbExternalLinkButton {
+  width: clamp(20px, min(7.5cqw, 24cqh), 33px);
+  height: clamp(20px, min(7.5cqw, 24cqh), 33px);
+  border-radius: 0 clamp(3px, min(2cqw, 4cqh), 5px) 0 0;
+}
+
+.image-wrap.sgdbAsset:hover .sgdbExternalLinkButton,
+.image-wrap.sgdbAsset.gpfocus .sgdbExternalLinkButton,
+.image-wrap.sgdbAsset:focus-within .sgdbExternalLinkButton {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.sgdbExternalLinkButton:hover,
+.sgdbExternalLinkButton:focus-visible {
+  background: rgba(12, 18, 26, 0.96);
+  outline: 0;
+}
+
+.sgdbExternalIcon {
+  width: clamp(19px, 10.6cqw, 26px);
+  height: clamp(19px, 10.6cqw, 26px);
+  display: block;
+  overflow: visible;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.35;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.image-wrap.sgdbAsset.type-grid_l .sgdbExternalIcon,
+.image-wrap.sgdbAsset.type-hero .sgdbExternalIcon,
+.image-wrap.sgdbAsset.type-logo .sgdbExternalIcon {
+  width: clamp(16px, min(6.25cqw, 18.75cqh), 23px);
+  height: clamp(16px, min(6.25cqw, 18.75cqh), 23px);
+  stroke-width: 2.45;
 }
 
 .sgdbMedia {
@@ -1005,24 +1696,24 @@ const styles = `
 
 .sgdbChips {
   position: absolute;
-  right: -6px;
-  top: 6px;
+  right: calc(-1 * clamp(5px, min(3.25cqw, 6.25cqh), 10px));
+  top: clamp(5px, min(3.25cqw, 6.25cqh), 10px);
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: clamp(3px, min(1.75cqw, 3.75cqh), 5px);
   z-index: 3;
   pointer-events: none;
 }
 
 .sgdbChips span {
-  padding: 3px 8px;
-  min-height: 14px;
-  border-radius: 4px 0 0 4px;
+  padding: clamp(3px, min(1.75cqw, 3.75cqh), 6px) clamp(6px, min(5cqw, 10cqh), 15px);
+  min-height: clamp(14px, min(8.75cqw, 16.25cqh), 28px);
+  border-radius: clamp(4px, min(2.75cqw, 6.25cqh), 8px) 0 0 clamp(4px, min(2.75cqw, 6.25cqh), 8px);
   color: white;
-  font-size: 9px;
+  font-size: clamp(8px, min(4.75cqw, 9.25cqh), 15px);
   font-weight: 700;
   text-transform: uppercase;
-  transform: translateX(calc(100% - 8px));
+  transform: translateX(calc(100% - clamp(8px, min(5cqw, 10cqh), 15px)));
   transition: transform 220ms cubic-bezier(0.33, 1, 0.68, 1);
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.35);
 }
@@ -1057,13 +1748,30 @@ const styles = `
   place-items: center;
   opacity: 0;
   z-index: -3;
-  background: rgba(0, 0, 0, 0.85);
+  background: rgba(0, 0, 0, 0.42);
   transition: opacity 100ms ease, z-index 0s 100ms;
 }
 
 .dload-overlay.downloading {
   opacity: 1;
   z-index: 5;
+}
+
+.sgdbApplyStatus {
+  display: grid;
+  place-items: center;
+  width: clamp(34px, min(18cqw, 28cqh), 52px);
+  height: clamp(34px, min(18cqw, 28cqh), 52px);
+  border-radius: 999px;
+  background: rgba(6, 10, 16, 0.82);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+
+.sgdbApplyStatus svg,
+.sgdbApplyStatus img,
+.sgdbApplyStatus div {
+  max-width: 26px;
+  max-height: 26px;
 }
 
 .sgdbDesktop .sgdbManualTabs {
@@ -1107,7 +1815,7 @@ const styles = `
 
 .sgdbDesktop .sgdb-asset-toolbar {
   display: grid;
-  grid-template-columns: max-content minmax(420px, 900px);
+  grid-template-columns: max-content minmax(420px, 900px) max-content;
   align-items: center;
   gap: 16px;
   justify-content: center;
@@ -1173,7 +1881,8 @@ const styles = `
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5);
 }
 
-.sgdbDesktop .sgdbFilterMainButton {
+.sgdbDesktop .sgdbFilterMainButton,
+.sgdbDesktop .sgdbResetButton {
   width: auto;
   height: 29px;
   min-width: 0;
@@ -1215,7 +1924,7 @@ const styles = `
 
 .sgdbDesktopToolbar .sgdb-asset-toolbar {
   display: grid;
-  grid-template-columns: max-content minmax(420px, 900px);
+  grid-template-columns: max-content minmax(420px, 900px) max-content;
   align-items: center;
   gap: 16px;
   justify-content: center;
@@ -1232,7 +1941,8 @@ const styles = `
   flex: 0 0 auto;
 }
 
-.sgdbDesktopToolbar .sgdbFilterMainButton {
+.sgdbDesktopToolbar .sgdbFilterMainButton,
+.sgdbDesktopToolbar .sgdbResetButton {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1251,7 +1961,9 @@ const styles = `
   box-shadow: none;
 }
 
-.sgdbDesktopToolbar .sgdbFilterMainButton.selected {
+.sgdbDesktopToolbar .sgdbFilterMainButton.selected,
+.sgdbDesktopToolbar .sgdbResetButton:hover,
+.sgdbDesktopToolbar .sgdbResetButton:focus-visible {
   color: #07111d;
   background: #f8f8f4;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
@@ -1341,5 +2053,42 @@ const styles = `
 
 .sgdbDesktopToolbar .sgdbDesktopSlider:focus-visible::-webkit-slider-thumb {
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5);
+}
+
+.sgdbDesktopToolbar .image-wrap.sgdbAsset.type-grid_l .sgdbExternalLinkButton,
+.sgdbDesktopToolbar .image-wrap.sgdbAsset.type-hero .sgdbExternalLinkButton {
+  width: clamp(30px, min(11.25cqw, 36cqh), 50px);
+  height: clamp(30px, min(11.25cqw, 36cqh), 50px);
+}
+
+.sgdbDesktopToolbar .image-wrap.sgdbAsset.type-grid_l .sgdbExternalIcon,
+.sgdbDesktopToolbar .image-wrap.sgdbAsset.type-hero .sgdbExternalIcon {
+  width: clamp(24px, min(9.375cqw, 28.125cqh), 35px);
+  height: clamp(24px, min(9.375cqw, 28.125cqh), 35px);
+}
+
+.sgdbDesktopToolbar .image-wrap.sgdbAsset.type-grid_l .sgdbChips,
+.sgdbDesktopToolbar .image-wrap.sgdbAsset.type-hero .sgdbChips {
+  right: calc(-1 * clamp(7.5px, min(4.875cqw, 9.375cqh), 15px));
+  top: clamp(7.5px, min(4.875cqw, 9.375cqh), 15px);
+  gap: clamp(4.5px, min(2.625cqw, 5.625cqh), 7.5px);
+}
+
+.sgdbDesktopToolbar .image-wrap.sgdbAsset.type-grid_l .sgdbChips span,
+.sgdbDesktopToolbar .image-wrap.sgdbAsset.type-hero .sgdbChips span {
+  padding: clamp(4.5px, min(2.625cqw, 5.625cqh), 9px) clamp(9px, min(7.5cqw, 15cqh), 22.5px);
+  min-height: clamp(21px, min(13.125cqw, 24.375cqh), 42px);
+  border-radius: clamp(6px, min(4.125cqw, 9.375cqh), 12px) 0 0 clamp(6px, min(4.125cqw, 9.375cqh), 12px);
+  font-size: clamp(12px, min(7.125cqw, 13.875cqh), 22.5px);
+  transform: translateX(calc(100% - clamp(12px, min(7.5cqw, 15cqh), 22.5px)));
+}
+
+.sgdbDesktopToolbar .image-wrap.sgdbAsset.type-grid_l:hover .sgdbChips span,
+.sgdbDesktopToolbar .image-wrap.sgdbAsset.type-grid_l.gpfocus .sgdbChips span,
+.sgdbDesktopToolbar .image-wrap.sgdbAsset.type-grid_l:focus-visible .sgdbChips span,
+.sgdbDesktopToolbar .image-wrap.sgdbAsset.type-hero:hover .sgdbChips span,
+.sgdbDesktopToolbar .image-wrap.sgdbAsset.type-hero.gpfocus .sgdbChips span,
+.sgdbDesktopToolbar .image-wrap.sgdbAsset.type-hero:focus-visible .sgdbChips span {
+  transform: translateX(0);
 }
 `;
