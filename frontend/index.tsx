@@ -325,17 +325,12 @@ const getSteamAppName = (appId: number) => {
   }
 };
 
-const setDefaultLogoPosition = async (appId: number) => {
+const setDefaultLogoPosition = (appId: number) => {
   const position = { pinnedPosition: 'BottomLeft', nWidthPct: 50, nHeightPct: 50 } as const;
   try {
-    if (SteamClient.Apps.SetCustomLogoPositionForApp) {
-      await SteamClient.Apps.SetCustomLogoPositionForApp(appId, position);
-      return;
-    }
-
     const overview = window.appStore?.GetAppOverviewByAppID(appId);
     if (overview && window.appDetailsStore?.SaveCustomLogoPosition) {
-      await window.appDetailsStore.SaveCustomLogoPosition(overview as Parameters<typeof window.appDetailsStore.SaveCustomLogoPosition>[0], position);
+      void Promise.resolve(window.appDetailsStore.SaveCustomLogoPosition(overview as Parameters<typeof window.appDetailsStore.SaveCustomLogoPosition>[0], position)).catch(() => {});
     }
   } catch {
     // Logo positioning should never make a successful artwork apply fail.
@@ -700,7 +695,7 @@ const SteamGridDBContent = ({ initialAppId, initialAssetType, popout = false }: 
           throw new Error('The animated asset could not be written directly to Steam grid cache.');
         }
         if (type === 'logo') {
-          await setDefaultLogoPosition(appId);
+          setDefaultLogoPosition(appId);
         }
         notice('Animated Artwork Saved', `${ASSET_LABEL[type]} was saved directly. Restart Steam if it does not refresh immediately.`);
         void refreshCurrentArtwork();
@@ -717,7 +712,7 @@ const SteamGridDBContent = ({ initialAppId, initialAssetType, popout = false }: 
 
       await SteamClient.Apps.SetCustomArtworkForApp(appId, downloaded.data, extension, ASSET_TYPE[type]);
       if (type === 'logo') {
-        await setDefaultLogoPosition(appId);
+        setDefaultLogoPosition(appId);
       }
       notice('Artwork Applied', `${ASSET_LABEL[type]} was applied to ${appId}.`);
       void refreshCurrentArtwork();
