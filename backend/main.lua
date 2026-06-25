@@ -110,17 +110,25 @@ local function steam_library_cache()
 end
 
 function set_steam_icon_from_url(appid, url, extension)
-    local cache_dir = steam_library_cache()
-    if not fs.exists(cache_dir) then
-        local ok, err = fs.create_directories(cache_dir)
-        if not ok then
-            logger:error("Could not create Steam library cache: " .. tostring(err))
-            return false
-        end
+    if type(appid) == "table" then
+        local params = appid
+        appid = params.appid
+        url = params.url
+        extension = params.extension
     end
+
+    local cache_dir = steam_library_cache()
 
     url = tostring(url or "")
     extension = tostring(extension or ""):lower()
+    if string.match(extension, "^https?://") then
+        url = extension
+        extension = ""
+    end
+    if not string.match(url, "^https?://") then
+        logger:error("Icon download/write failed: invalid icon URL: " .. tostring(url))
+        return false
+    end
     if extension == "" then
         extension = string.match(url, "%.([A-Za-z0-9]+)%??[^/]*$") or "png"
         extension = tostring(extension):lower()
@@ -136,19 +144,22 @@ function set_steam_icon_from_url(appid, url, extension)
     local base_name = tostring(appid) .. "_icon"
     local file_name = base_name .. "." .. extension
     local icon_path = fs.join(cache_dir, file_name)
+    local app_cache_dir = fs.join(cache_dir, tostring(appid))
     local script = table.concat({
+        "try {",
         "$ProgressPreference = 'SilentlyContinue'",
         "$ErrorActionPreference = 'Stop'",
         "$userdata = " .. ps_quote(userdata_path),
         "$baseName = " .. ps_quote(base_name),
         "$fileName = " .. ps_quote(file_name),
+        "$cacheDir = " .. ps_quote(cache_dir),
         "$cacheTarget = " .. ps_quote(icon_path),
+        "$appCacheDir = " .. ps_quote(app_cache_dir),
         "$wc = [System.Net.WebClient]::new()",
         "$wc.Headers.Add('User-Agent', " .. ps_quote(USER_AGENT) .. ")",
         "$bytes = $wc.DownloadData(" .. ps_quote(url) .. ")",
-        "[System.IO.File]::WriteAllBytes($cacheTarget, $bytes)",
         "$gridDirs = Get-ChildItem -LiteralPath $userdata -Directory | ForEach-Object { Join-Path $_.FullName 'config\\grid' }",
-        "$written = @($cacheTarget)",
+        "$written = @()",
         "foreach ($gridDir in $gridDirs) {",
         "  if (!(Test-Path -LiteralPath $gridDir)) { New-Item -ItemType Directory -Force -Path $gridDir | Out-Null }",
         "  Get-ChildItem -LiteralPath $gridDir -File -ErrorAction SilentlyContinue | Where-Object { $_.BaseName -eq $baseName } | Remove-Item -Force -ErrorAction SilentlyContinue",
@@ -156,7 +167,20 @@ function set_steam_icon_from_url(appid, url, extension)
         "  [System.IO.File]::WriteAllBytes($target, $bytes)",
         "  $written += $target",
         "}",
-        "Write-Output ($written -join '|')"
+        "if (Test-Path -LiteralPath $cacheDir) {",
+        "  [System.IO.File]::WriteAllBytes($cacheTarget, $bytes)",
+        "  $written += $cacheTarget",
+        "}",
+        "if (Test-Path -LiteralPath $appCacheDir) {",
+        "  $rootIconTargets = Get-ChildItem -LiteralPath $appCacheDir -File -ErrorAction SilentlyContinue | Where-Object { $_.BaseName -match '^[a-fA-F0-9]{40}$' -and $_.Extension -match '^\\.(jpg|jpeg|png|ico)$' }",
+        "  foreach ($targetFile in $rootIconTargets) {",
+        "    [System.IO.File]::WriteAllBytes($targetFile.FullName, $bytes)",
+        "    $written += $targetFile.FullName",
+        "  }",
+        "}",
+        "if ($written.Count -eq 0) { throw 'No Steam grid folders were available.' }",
+        "Write-Output ($written -join '|')",
+        "} catch { Write-Output ('ERROR: ' + $_.Exception.Message); exit 1 }"
     }, "; ")
 
     local result = run_powershell(script)
@@ -164,11 +188,23 @@ function set_steam_icon_from_url(appid, url, extension)
         logger:error("Icon download/write failed")
         return false
     end
+    if string.sub(result, 1, 7) == "ERROR: " then
+        logger:error("Icon download/write failed: " .. string.sub(result, 8))
+        return false
+    end
 
     return result
 end
 
 function set_animated_artwork_from_url(appid, asset_type, url, extension)
+    if type(appid) == "table" then
+        local params = appid
+        appid = params.appid
+        asset_type = params.asset_type
+        url = params.url
+        extension = params.extension
+    end
+
     local suffixes = {
         grid_p = "p",
         grid_l = "",
@@ -344,6 +380,49 @@ function get_current_artwork(appid)
             [appid .. "_logo"] = "logo",
             [appid .. "_icon"] = "icon",
         }
+
+        local app_cache_dir = fs.join(cache_dir, appid)
+        local function cache_asset_key(file_entry, in_app_cache_root)
+            local stem = fs.stem(file_entry.path)
+            local name = string.lower(tostring(file_entry.name or stem or ""))
+            local ext = string.lower(tostring(fs.extension(file_entry.path) or ""))
+
+            if name == "library_capsule.jpg" or name == "library_600x900.jpg" or name == "portrait.jpg" then
+                return "grid_p"
+            end
+            if name == "library_header.jpg" or name == "header.jpg" then
+                return "grid_l"
+            end
+            if name == "library_hero.jpg" or name == "hero.jpg" then
+                return "hero"
+            end
+            if name == "logo.png" or name == "logo.jpg" then
+                return "logo"
+            end
+            if in_app_cache_root and (ext == ".jpg" or ext == ".png" or ext == ".ico") then
+                return "icon"
+            end
+
+            return fallback_stems[stem]
+        end
+
+        local function scan_cache_directory(directory, in_app_cache_root)
+            local entries = fs.list(directory) or {}
+            for _, entry in ipairs(entries) do
+                if entry.is_file then
+                    local key = cache_asset_key(entry, in_app_cache_root)
+                    if key and not found[key] then
+                        remember_artwork(key, entry)
+                    end
+                elseif entry.is_directory then
+                    scan_cache_directory(entry.path, false)
+                end
+            end
+        end
+
+        if fs.exists(app_cache_dir) then
+            scan_cache_directory(app_cache_dir, true)
+        end
 
         local cache_files = fs.list(cache_dir) or {}
         for _, file_entry in ipairs(cache_files) do

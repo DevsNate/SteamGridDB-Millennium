@@ -49,21 +49,18 @@ const isAnimatedAsset = (src: string) => /\.(webm|mp4)(\?|$)/i.test(src);
 const DEFAULT_VISIBLE_ROWS = 7;
 
 const assetGridStyle = (assetType: SGDBAssetType, zoom: number) => {
-  if (assetType === 'hero' || assetType === 'logo') {
-    const minColumns = assetType === 'hero' ? 3.45 : 2;
-    const maxColumns = assetType === 'hero' ? 6.45 : 6;
-    const columns = Math.max(minColumns, Math.min(maxColumns, zoom));
-    return { gridTemplateColumns: `repeat(auto-fill, minmax(calc(${100 / columns}% - 10px), 1fr))` };
-  }
-
   return { ['--asset-size' as string]: `${zoom}px` };
 };
 
 const sliderLimits = (assetType: SGDBAssetType) => ({
-  min: assetType === 'hero' ? 3.45 : assetType === 'logo' ? 2 : assetType === 'grid_l' ? 160 : 100,
-  max: assetType === 'hero' ? 6.45 : assetType === 'logo' ? 6 : assetType === 'grid_l' ? 640 : assetType === 'grid_p' ? 300 : 200,
-  step: assetType === 'hero' ? 0.25 : assetType === 'logo' ? 1 : 5,
+  min: assetType === 'hero' ? 220 : assetType === 'logo' ? 180 : assetType === 'grid_l' ? 160 : 100,
+  max: assetType === 'hero' ? 760 : assetType === 'logo' ? 640 : assetType === 'grid_l' ? 640 : assetType === 'grid_p' ? 300 : 220,
+  step: 1,
 });
+
+const zoomToSliderValue = (_assetType: SGDBAssetType, zoom: number, _slider: ReturnType<typeof sliderLimits>) => zoom;
+
+const sliderValueToZoom = (_assetType: SGDBAssetType, value: number, _slider: ReturnType<typeof sliderLimits>) => value;
 
 const AssetPreview = ({ asset, assetType }: { asset: SGDBAsset; assetType: SGDBAssetType }) => {
   const [sourceIndex, setSourceIndex] = useState(0);
@@ -99,17 +96,64 @@ const ExternalLinkIcon = () => (
   </svg>
 );
 
+const ResetIcon = () => (
+  <svg className="sgdbExternalIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M3 6h18" />
+    <path d="M8 6V4.75C8 3.78 8.78 3 9.75 3h4.5c.97 0 1.75.78 1.75 1.75V6" />
+    <path d="M19 6l-.8 12.3A2 2 0 0 1 16.2 20H7.8a2 2 0 0 1-2-1.7L5 6" />
+    <path d="M10 11v5" />
+    <path d="M14 11v5" />
+  </svg>
+);
+
 const fileUrl = (path: string) => `file:///${path.replace(/\\/g, '/')}`;
 
-const ManagePreview = ({ item, assetType }: { item?: CurrentArtworkState[SGDBAssetType]; assetType: SGDBAssetType }) => {
-  if (!item?.path) {
+const ManagePreview = ({
+  item,
+  assetType,
+  resetArtwork,
+}: {
+  item?: CurrentArtworkState[SGDBAssetType];
+  assetType: SGDBAssetType;
+  resetArtwork: (type: SGDBAssetType) => Promise<void>;
+}) => {
+  const sources = useMemo(() => {
+    const current = item?.dataUrl || (item?.path ? fileUrl(item.path) : '');
+    return Array.from(new Set([current].filter(Boolean)));
+  }, [item?.dataUrl, item?.path]);
+  const [sourceIndex, setSourceIndex] = useState(0);
+
+  useEffect(() => {
+    setSourceIndex(0);
+  }, [sources]);
+
+  const src = sources[sourceIndex] ?? '';
+
+  if (!src) {
     return <div className="sgdbManageMissing">Not set</div>;
   }
 
-  const src = item.dataUrl || fileUrl(item.path);
   return (
     <Focusable className={`sgdbManagePreview type-${assetType}`} role="button">
-      <img className={`sgdbManageImage type-${assetType}`} src={src} alt="" />
+      <img
+        className={`sgdbManageImage type-${assetType}`}
+        src={src}
+        alt=""
+        onError={() => setSourceIndex((current) => Math.min(current + 1, sources.length))}
+      />
+      <button
+        className="sgdbManageResetButton"
+        type="button"
+        aria-label={`Reset ${ASSET_LABEL[assetType]}`}
+        title={`Reset ${ASSET_LABEL[assetType]}`}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          void resetArtwork(assetType);
+        }}
+      >
+        <ResetIcon />
+      </button>
     </Focusable>
   );
 };
@@ -165,9 +209,13 @@ export const GamepadView = ({
   const tabLoading = loadingByType[assetType];
   const tabEndReached = endReachedByType[assetType];
   const slider = sliderLimits(assetType);
-  const currentZoom = Math.max(slider.min, Math.min(slider.max, zoomByType[assetType]));
+  const savedZoom = zoomByType[assetType];
+  const normalizedZoom = savedZoom < slider.min || savedZoom > slider.max ? zoomDefaults[assetType] : savedZoom;
+  const clampedZoom = Math.max(slider.min, Math.min(slider.max, normalizedZoom));
+  const currentZoom = clampedZoom;
+  const currentSliderValue = zoomToSliderValue(assetType, currentZoom, slider);
   const tabGridStyle = assetGridStyle(assetType, currentZoom);
-  const sliderProgress = ((currentZoom - slider.min) / (slider.max - slider.min)) * 100;
+  const sliderProgress = ((currentSliderValue - slider.min) / (slider.max - slider.min)) * 100;
   const columnCount = columnCountByType[assetType];
   const rawVisibleLimit = visibleRowsByType[assetType] * columnCount;
   const rawVisibleCount = Math.min(tabAssets.length, rawVisibleLimit);
@@ -388,6 +436,13 @@ export const GamepadView = ({
             className={`sgdbGamepadTab sgdbTextPill ${tab === activeTab ? 'selected' : ''} ${tab === activeTab && focusZone === 'tabs' ? 'tabFocus' : 'contentFocus'}`}
             type="button"
             tabIndex={-1}
+            onPointerDown={(event) => {
+              if (event.pointerType !== 'mouse' && event.pointerType !== 'touch') {
+                return;
+              }
+              event.preventDefault();
+              selectTab(tab);
+            }}
             onClick={() => selectTab(tab)}
           >
             {VIEW_LABEL[tab]}
@@ -404,23 +459,23 @@ export const GamepadView = ({
           <Focusable className="sgdbManageGrid" flow-children="right" onButtonDown={handleTabBumper}>
             <section className="sgdbManagePanel sgdbManagePanelCapsule">
               <h2>Current Grid</h2>
-              <ManagePreview item={currentArtwork.grid_p} assetType="grid_p" />
+              <ManagePreview item={currentArtwork.grid_p} assetType="grid_p" resetArtwork={resetArtwork} />
             </section>
             <section className="sgdbManagePanel sgdbManagePanelWide">
               <h2>Current Wide Grid</h2>
-              <ManagePreview item={currentArtwork.grid_l} assetType="grid_l" />
+              <ManagePreview item={currentArtwork.grid_l} assetType="grid_l" resetArtwork={resetArtwork} />
             </section>
             <section className="sgdbManagePanel sgdbManagePanelLogo">
               <h2>Current Logo</h2>
-              <ManagePreview item={currentArtwork.logo} assetType="logo" />
+              <ManagePreview item={currentArtwork.logo} assetType="logo" resetArtwork={resetArtwork} />
             </section>
             <section className="sgdbManagePanel sgdbManagePanelHero">
               <h2>Current Hero</h2>
-              <ManagePreview item={currentArtwork.hero} assetType="hero" />
+              <ManagePreview item={currentArtwork.hero} assetType="hero" resetArtwork={resetArtwork} />
             </section>
             <section className="sgdbManagePanel sgdbManagePanelIcon">
               <h2>Current Icon</h2>
-              <ManagePreview item={currentArtwork.icon} assetType="icon" />
+              <ManagePreview item={currentArtwork.icon} assetType="icon" resetArtwork={resetArtwork} />
             </section>
           </Focusable>
         ) : (
@@ -441,13 +496,16 @@ export const GamepadView = ({
             <div className="sgdbSliderWithMarks">
               <SliderField
                 className="size-slider"
-                value={currentZoom}
+                value={currentSliderValue}
                 min={slider.min}
                 max={slider.max}
                 step={slider.step}
                 showValue={false}
                 bottomSeparator="none"
-                onChange={(value) => setZoomByType((current) => ({ ...current, [assetType]: value }))}
+                onChange={(value) => {
+                  const nextZoom = sliderValueToZoom(assetType, value, slider);
+                  setZoomByType((current) => ({ ...current, [assetType]: nextZoom }));
+                }}
               />
             </div>
             <Focusable className="sgdbResetButton sgdbTextPill" onActivate={resetCurrentArtwork} onClick={resetCurrentArtwork} role="button">
@@ -465,12 +523,12 @@ export const GamepadView = ({
               <input
                 className="sgdbDesktopSlider"
                 type="range"
-                value={currentZoom}
+                value={currentSliderValue}
                 min={slider.min}
                 max={slider.max}
                 step={slider.step}
                 onChange={(event) => {
-                  const nextZoom = Number(event.currentTarget.value);
+                  const nextZoom = sliderValueToZoom(assetType, Number(event.currentTarget.value), slider);
                   setZoomByType((current) => ({ ...current, [assetType]: nextZoom }));
                 }}
               />

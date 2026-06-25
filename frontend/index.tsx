@@ -73,6 +73,7 @@ type PluginSettings = {
   showExternalLinks: boolean;
   showCreatorNames: boolean;
   preloadPages: number;
+  spaceThemeCompatibility: boolean;
 };
 
 type SGDBResponse<T> = {
@@ -196,13 +197,14 @@ const defaultSettings: PluginSettings = {
   showExternalLinks: true,
   showCreatorNames: true,
   preloadPages: 0,
+  spaceThemeCompatibility: false,
 };
 
 const defaultZoom: ZoomState = {
   grid_p: 180,
   grid_l: 395,
-  hero: 3.45,
-  logo: 4,
+  hero: 420,
+  logo: 360,
   icon: 140,
 };
 
@@ -219,6 +221,7 @@ type ZoomModeState = {
 const ZOOM_STORAGE_KEY = 'steamgriddb:zoomByMode:v1';
 const SETTINGS_STORAGE_KEY = 'steamgriddb:settings:v1';
 const FILTER_STORAGE_KEY = 'steamgriddb:filtersByType:v1';
+const LAST_APPID_STORAGE_KEY = 'steamgriddb:lastAppId:v1';
 
 const isZoomState = (value: unknown): value is ZoomState => {
   if (!value || typeof value !== 'object') {
@@ -290,6 +293,7 @@ const normalizeSettings = (settings: Partial<PluginSettings>): PluginSettings =>
   showExternalLinks: typeof settings.showExternalLinks === 'boolean' ? settings.showExternalLinks : defaultSettings.showExternalLinks,
   showCreatorNames: typeof settings.showCreatorNames === 'boolean' ? settings.showCreatorNames : defaultSettings.showCreatorNames,
   preloadPages: Math.max(0, Math.min(5, Number.isFinite(settings.preloadPages) ? Math.trunc(settings.preloadPages as number) : defaultSettings.preloadPages)),
+  spaceThemeCompatibility: typeof settings.spaceThemeCompatibility === 'boolean' ? settings.spaceThemeCompatibility : defaultSettings.spaceThemeCompatibility,
 });
 
 const loadPluginSettings = (): PluginSettings => {
@@ -300,6 +304,53 @@ const loadPluginSettings = (): PluginSettings => {
     return defaultSettings;
   }
 };
+
+const normalizeAppIdText = (value: unknown): string | null => {
+  const text = String(value ?? '').trim();
+  if (!/^\d+$/.test(text)) {
+    return null;
+  }
+
+  const appId = Number.parseInt(text, 10);
+  return Number.isFinite(appId) && appId > 0 ? String(appId) : null;
+};
+
+const rememberLastAppId = (appid: number | string) => {
+  const normalized = normalizeAppIdText(appid);
+  if (normalized) {
+    window.localStorage.setItem(LAST_APPID_STORAGE_KEY, normalized);
+  }
+};
+
+const appIdFromSteamHistory = (): string | null => {
+  try {
+    const entries = (history.state as { memoryhistory?: { initialEntries?: unknown[] } } | null)?.memoryhistory?.initialEntries;
+    if (!Array.isArray(entries)) {
+      return null;
+    }
+
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const appid = normalizeAppIdText(String(entries[index] ?? '').match(/\/library\/app\/(\d+)/)?.[1]);
+      if (appid) {
+        return appid;
+      }
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+};
+
+const appIdFromCurrentLocation = (): string | null => {
+  try {
+    return normalizeAppIdText(window.location.pathname.match(/\/steamgriddb\/(\d+)/)?.[1]);
+  } catch {
+    return null;
+  }
+};
+
+const fallbackAppIdText = () => appIdFromCurrentLocation() ?? normalizeAppIdText(window.localStorage.getItem(LAST_APPID_STORAGE_KEY)) ?? appIdFromSteamHistory();
 
 function parseResponse<T>(body: string | false): T {
   if (!body) {
@@ -430,13 +481,6 @@ const downloadAssetInBrowser = async (url: string): Promise<DownloadedAsset> => 
 };
 
 export const assetGridStyle = (assetType: SGDBAssetType, zoom: number) => {
-  if (assetType === 'hero' || assetType === 'logo') {
-    const minColumns = assetType === 'hero' ? 3.45 : 2;
-    const maxColumns = assetType === 'hero' ? 6.45 : 6;
-    const columns = Math.max(minColumns, Math.min(maxColumns, zoom));
-    return { gridTemplateColumns: `repeat(auto-fill, minmax(calc(${100 / columns}% - 10px), 1fr))` };
-  }
-
   return { ['--asset-size' as string]: `${zoom}px` };
 };
 
@@ -525,14 +569,36 @@ const SettingsView = ({
             }}
           />
         </label>
+        <label className="sgdbSettingsRow">
+          <span>SpaceTheme compatibility</span>
+          <input
+            type="checkbox"
+            checked={settings.spaceThemeCompatibility}
+            onChange={(event) => {
+              const spaceThemeCompatibility = event.currentTarget.checked;
+              setSettings((current) => ({ ...current, spaceThemeCompatibility }));
+            }}
+          />
+        </label>
       </section>
     </div>
   );
 };
 
-const SteamGridDBContent = ({ initialAppId, initialAssetType, popout = false }: { initialAppId?: string; initialAssetType?: SGDBAssetType; popout?: boolean }) => {
+const SteamGridDBContent = ({
+  initialAppId,
+  initialAssetType,
+  popout = false,
+  allowAppIdFallback = false,
+}: {
+  initialAppId?: string;
+  initialAssetType?: SGDBAssetType;
+  popout?: boolean;
+  allowAppIdFallback?: boolean;
+}) => {
+  const resolvedInitialAppId = normalizeAppIdText(initialAppId) ?? (allowAppIdFallback ? fallbackAppIdText() : null) ?? '';
   const [settings, setSettings] = useState<PluginSettings>(() => loadPluginSettings());
-  const [appIdText, setAppIdText] = useState(initialAppId ?? '');
+  const [appIdText, setAppIdText] = useState(resolvedInitialAppId);
   const [assetType, setAssetType] = useState<SGDBAssetType>('grid_p');
   const [assetsByType, setAssetsByType] = useState<AssetState>(() => emptyAssets());
   const [pagesByType, setPagesByType] = useState<PageState>(() => emptyPages());
@@ -546,6 +612,7 @@ const SteamGridDBContent = ({ initialAppId, initialAssetType, popout = false }: 
   const [sgdbGameId, setSgdbGameId] = useState<number | null>(null);
   const [currentArtwork, setCurrentArtwork] = useState<CurrentArtworkState>({});
   const appId = useMemo(() => Number.parseInt(appIdText, 10), [appIdText]);
+  const hasAppId = Number.isFinite(appId) && appId > 0;
   const isGamepadUI = uiMode === EUIMode.GamePad;
   const zoomModeKey = isGamepadUI ? 'gamepad' : 'desktop';
   const zoomByType = zoomByMode[zoomModeKey];
@@ -562,6 +629,12 @@ const SteamGridDBContent = ({ initialAppId, initialAssetType, popout = false }: 
   useEffect(() => {
     window.localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(filtersByType));
   }, [filtersByType]);
+
+  useEffect(() => {
+    if (hasAppId) {
+      rememberLastAppId(appId);
+    }
+  }, [appId, hasAppId]);
 
   const setZoomByType = useCallback<Dispatch<SetStateAction<ZoomState>>>((action) => {
     setZoomByMode((current) => {
@@ -605,14 +678,15 @@ const SteamGridDBContent = ({ initialAppId, initialAssetType, popout = false }: 
   }, [appId]);
 
   useEffect(() => {
-    if (initialAppId) {
-      setAppIdText(initialAppId);
+    const nextAppId = normalizeAppIdText(initialAppId) ?? (allowAppIdFallback ? fallbackAppIdText() : null);
+    if (nextAppId) {
+      setAppIdText(nextAppId);
       setAssetsByType(emptyAssets());
       setPagesByType(emptyPages());
       setEndReachedByType(emptyEnd());
       setSgdbGameId(null);
     }
-  }, [initialAppId]);
+  }, [allowAppIdFallback, initialAppId]);
 
   useEffect(() => {
     if (initialAssetType) {
@@ -745,6 +819,7 @@ const SteamGridDBContent = ({ initialAppId, initialAssetType, popout = false }: 
 
       const shouldDirectWriteAnimated = isAnimatedAsset(asset.thumb) || isDirectAnimatedExtension(extension);
       if (shouldDirectWriteAnimated) {
+        await SteamClient.Apps.ClearCustomArtworkForApp(appId, ASSET_TYPE[type]).catch(() => undefined);
         const savedPath = await setAnimatedArtworkFromUrl({
           appid: appId,
           asset_type: type,
@@ -770,6 +845,7 @@ const SteamGridDBContent = ({ initialAppId, initialAssetType, popout = false }: 
         throw new Error('The selected image could not be downloaded.');
       }
 
+      await SteamClient.Apps.ClearCustomArtworkForApp(appId, ASSET_TYPE[type]).catch(() => undefined);
       await SteamClient.Apps.SetCustomArtworkForApp(appId, downloaded.data, extension, ASSET_TYPE[type]);
       if (type === 'logo') {
         setDefaultLogoPosition(appId);
@@ -843,16 +919,16 @@ const SteamGridDBContent = ({ initialAppId, initialAssetType, popout = false }: 
   };
 
   return (
-    <div className={`sgdbRoot sgdbGamepad ${isGamepadUI ? '' : 'sgdbDesktopToolbar'} ${popout ? 'sgdbPopoutContent' : ''}`} id="sgdb-wrap">
+    <div className={`sgdbRoot sgdbGamepad ${settings.spaceThemeCompatibility ? 'sgdbSpaceThemeCompat' : ''} ${isGamepadUI ? '' : 'sgdbDesktopToolbar'} ${popout ? 'sgdbPopoutContent' : ''}`} id="sgdb-wrap">
       <style>{styles}</style>
-      {initialAppId ? <GamepadView {...viewProps} /> : <SettingsView settings={settings} setSettings={setSettings} />}
+      {hasAppId ? <GamepadView {...viewProps} /> : <SettingsView settings={settings} setSettings={setSettings} />}
     </div>
   );
 };
 
 const SteamGridDBRoute = () => {
   const { appid, assetType } = useParams<{ appid: string; assetType?: SGDBAssetType }>();
-  return <SteamGridDBContent initialAppId={appid} initialAssetType={assetType} />;
+  return <SteamGridDBContent initialAppId={appid} initialAssetType={assetType} allowAppIdFallback />;
 };
 
 function openSteamGridDB() {
@@ -864,13 +940,14 @@ function openSteamGridDB() {
 Millennium?.exposeObj?.({ openSteamGridDB });
 
 const openSteamGridDBForApp = async (appid: number) => {
+  rememberLastAppId(appid);
   const mode = await SteamClient.UI.GetUIMode().catch(() => EUIMode.Desktop);
   if (mode === EUIMode.GamePad) {
     Navigation.Navigate(`/steamgriddb/${appid}`);
     return;
   }
 
-  showModal(<SteamGridDBContent initialAppId={String(appid)} popout />, window, {
+  showModal(<SteamGridDBContent initialAppId={String(appid)} popout allowAppIdFallback />, window, {
     strTitle: 'SteamGridDB',
     bHideMainWindowForPopouts: false,
     bForcePopOut: true,
@@ -1054,26 +1131,44 @@ const styles = `
 .sgdbDesktopToolbar {
   position: relative;
   box-shadow: 0 calc(-1 * var(--basicui-header-height, 40px)) 0 #0a1218;
+  background:
+    radial-gradient(1180px 760px at 52% 16%, rgba(17, 29, 38, 0.36), rgba(7, 12, 17, 0.18) 54%, transparent 84%),
+    linear-gradient(180deg, #05080b 0, #060a0e 96px, #070d12 210px, #091017 100%);
 }
 
 .sgdbPopoutContent {
+  display: flex;
+  flex-direction: column;
   height: 100vh;
   margin-top: 0;
-  padding-right: 8px;
-  overflow-y: auto;
-  scrollbar-gutter: stable;
+  padding: 0;
+  overflow: hidden;
   box-shadow: none;
+  background:
+    radial-gradient(1180px 760px at 52% 16%, rgba(17, 29, 38, 0.36), rgba(7, 12, 17, 0.18) 54%, transparent 84%),
+    linear-gradient(180deg, #05080b 0, #060a0e 96px, #070d12 210px, #091017 100%);
 }
 
-.sgdbPopoutContent::-webkit-scrollbar {
+.sgdbPopoutContent .tabcontents-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0 8px 12px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  box-sizing: border-box;
+}
+
+.sgdbPopoutContent .tabcontents-wrap::-webkit-scrollbar {
   width: 10px;
 }
 
-.sgdbPopoutContent::-webkit-scrollbar-track {
+.sgdbPopoutContent .tabcontents-wrap::-webkit-scrollbar-track {
+  margin-top: 8px;
+  margin-bottom: 8px;
   background: transparent;
 }
 
-.sgdbPopoutContent::-webkit-scrollbar-thumb {
+.sgdbPopoutContent .tabcontents-wrap::-webkit-scrollbar-thumb {
   min-height: 48px;
   border: 2px solid transparent;
   border-radius: 999px;
@@ -1081,12 +1176,12 @@ const styles = `
   background-clip: padding-box;
 }
 
-.sgdbPopoutContent:hover::-webkit-scrollbar-thumb {
+.sgdbPopoutContent .tabcontents-wrap:hover::-webkit-scrollbar-thumb {
   background: rgba(139, 153, 170, 0.62);
   background-clip: padding-box;
 }
 
-.sgdbPopoutContent::-webkit-scrollbar-thumb:hover {
+.sgdbPopoutContent .tabcontents-wrap::-webkit-scrollbar-thumb:hover {
   background: rgba(191, 202, 215, 0.78);
   background-clip: padding-box;
 }
@@ -1095,9 +1190,36 @@ body:has(#sgdb-wrap) button[aria-label="Close"],
 body:has(#sgdb-wrap) button[title="Close"],
 body:has(#sgdb-wrap) [class*="CloseButton"],
 body:has(#sgdb-wrap) [class*="closeButton"] {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  min-width: 46px !important;
+  min-height: 36px !important;
+  position: relative !important;
+  z-index: 20 !important;
   color: #8b98a5 !important;
   background: transparent !important;
   box-shadow: none !important;
+}
+
+body:has(#sgdb-wrap) .title-bar-actions.window-controls {
+  position: relative !important;
+  z-index: 20 !important;
+}
+
+body:has(#sgdb-wrap) [class*="closeButton"] .title-area-icon-inner,
+body:has(#sgdb-wrap) [class*="CloseButton"] .title-area-icon-inner {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+body:has(#sgdb-wrap) [class*="closeButton"] svg,
+body:has(#sgdb-wrap) [class*="CloseButton"] svg {
+  width: 16px !important;
+  height: 16px !important;
 }
 
 body:has(#sgdb-wrap) button[aria-label="Close"]:hover,
@@ -1112,7 +1234,7 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 12px 30px 16px;
+  padding: 14px 30px;
   background: #101820;
   box-sizing: border-box;
 }
@@ -1127,6 +1249,26 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 .sgdbManualTabs button.selected {
   color: #07111d;
   background: #1a9fff;
+}
+
+.sgdbPopoutContent .sgdbManualTabs {
+  position: relative;
+}
+
+.sgdbSpaceThemeCompat.sgdbPopoutContent .sgdbManualTabs {
+  position: relative;
+  z-index: 3;
+  width: calc(100% - 52px);
+  min-height: 64px;
+  padding-top: 16px;
+  padding-bottom: 16px;
+  -webkit-app-region: drag;
+}
+
+.sgdbSpaceThemeCompat.sgdbPopoutContent .sgdbManualTabs button {
+  position: relative;
+  z-index: 4;
+  -webkit-app-region: no-drag;
 }
 
 .sgdbTextPill {
@@ -1365,6 +1507,14 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   background: transparent;
 }
 
+.sgdbGamepadTabs + .tabcontents-wrap {
+  margin-top: -16px;
+}
+
+.sgdbPopoutContent .sgdbGamepadTabs + .tabcontents-wrap {
+  margin-top: 0;
+}
+
 .spinnyboi {
   display: flex;
   align-items: center;
@@ -1589,7 +1739,9 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 .sgdbGamepad .sgdbMoreButton {
   width: auto;
   min-width: 92px;
-  height: 32px;
+  height: 32px !important;
+  min-height: 32px !important;
+  flex: 0 0 32px;
   padding: 0 16px;
   margin: 4px auto var(--gamepadui-current-footer-height, 24px);
   color: rgba(226, 231, 237, 0.82);
@@ -1613,16 +1765,16 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 
 .sgdbManageGrid {
   display: grid;
-  grid-template-columns: minmax(220px, 0.72fr) minmax(420px, 1.78fr);
+  grid-template-columns: 420px minmax(0, 1fr) 164px;
   grid-template-areas:
-    "grid wide"
-    "grid logo"
-    "icon logo"
-    "hero hero";
-  gap: 18px 26px;
+    "grid wide wide"
+    "grid logo icon"
+    "hero hero hero";
+  gap: 14px 32px;
   width: 100%;
-  padding: 16px 42px 44px;
+  padding: 14px 32px 28px;
   box-sizing: border-box;
+  align-items: start;
 }
 
 .sgdbManagePanel {
@@ -1630,9 +1782,9 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 }
 
 .sgdbManagePanel h2 {
-  margin: 0 0 8px;
+  margin: 0 0 7px;
   color: rgba(242, 246, 250, 0.9);
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 700;
   letter-spacing: 2.4px;
   line-height: 1.1;
@@ -1655,10 +1807,12 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 
 .sgdbManagePanelHero {
   grid-area: hero;
+  margin-top: 40px;
 }
 
 .sgdbManagePanelIcon {
   grid-area: icon;
+  margin-top: 0;
 }
 
 .sgdbManagePreview,
@@ -1675,27 +1829,32 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 }
 
 .sgdbManagePreview.type-grid_p {
-  aspect-ratio: 2 / 3;
-  max-height: 460px;
+  aspect-ratio: auto;
+  width: 420px;
+  height: 630px;
 }
 
 .sgdbManagePreview.type-grid_l {
-  aspect-ratio: 92 / 43;
+  width: 100%;
+  height: 450px;
 }
 
 .sgdbManagePreview.type-logo {
-  min-height: 108px;
-  aspect-ratio: 5 / 1;
+  width: 100%;
+  height: 140px;
+  min-height: 0;
 }
 
 .sgdbManagePreview.type-hero {
-  aspect-ratio: 16 / 5;
+  width: 100%;
+  height: 450px;
 }
 
 .sgdbManagePreview.type-icon {
-  width: 132px;
+  width: 140px;
+  height: 140px;
   max-width: 100%;
-  aspect-ratio: 1 / 1;
+  justify-self: center;
 }
 
 .sgdbManageImage {
@@ -1705,18 +1864,66 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
+  object-position: center;
 }
 
-.sgdbManageImage.type-grid_p,
-.sgdbManageImage.type-grid_l,
-.sgdbManageImage.type-hero {
-  object-fit: cover;
-}
-
-.sgdbManageImage.type-logo,
-.sgdbManageImage.type-icon {
-  padding: 12px;
+.sgdbManageImage.type-logo {
+  width: min(340px, calc(100% - 18px)) !important;
+  height: calc(100% - 18px) !important;
+  max-width: min(340px, calc(100% - 18px)) !important;
+  max-height: calc(100% - 18px) !important;
+  object-fit: contain !important;
+  padding: 0;
   box-sizing: border-box;
+}
+
+.sgdbManageImage.type-icon {
+  max-width: calc(100% - 44px);
+  max-height: calc(100% - 44px);
+  padding: 0;
+  box-sizing: border-box;
+}
+
+.sgdbManageResetButton {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.58);
+  border-right-width: 0;
+  border-bottom-width: 0;
+  border-radius: 5px 0 0 0;
+  color: rgba(255, 255, 255, 0.94);
+  background: rgba(7, 10, 15, 0.86);
+  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.24);
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 120ms ease, transform 120ms ease, background 120ms ease;
+}
+
+.sgdbManagePreview:hover .sgdbManageResetButton,
+.sgdbManagePreview.gpfocus .sgdbManageResetButton,
+.sgdbManagePreview:focus-within .sgdbManageResetButton {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.sgdbManageResetButton:hover,
+.sgdbManageResetButton:focus-visible {
+  background: rgba(12, 18, 26, 0.96);
+  outline: 0;
+}
+
+.sgdbManageResetButton .sgdbExternalIcon {
+  width: 21px;
+  height: 21px;
+  stroke-width: 2.25;
 }
 
 .sgdbManageMissing {
@@ -1726,26 +1933,32 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 }
 
 .sgdbManagePanelCapsule .sgdbManageMissing {
-  aspect-ratio: 2 / 3;
-  min-height: 260px;
+  aspect-ratio: auto;
+  width: 420px;
+  height: 630px;
+  min-height: 0;
 }
 
 .sgdbManagePanelWide .sgdbManageMissing {
-  aspect-ratio: 92 / 43;
+  width: 100%;
+  height: 450px;
 }
 
 .sgdbManagePanelLogo .sgdbManageMissing {
-  min-height: 108px;
-  aspect-ratio: 5 / 1;
+  width: 100%;
+  height: 140px;
+  min-height: 0;
 }
 
 .sgdbManagePanelHero .sgdbManageMissing {
-  aspect-ratio: 16 / 5;
+  width: 100%;
+  height: 450px;
 }
 
 .sgdbManagePanelIcon .sgdbManageMissing {
-  width: 132px;
-  aspect-ratio: 1 / 1;
+  width: 140px;
+  height: 140px;
+  justify-self: center;
 }
 
 .sgdbResultsState {
@@ -1764,6 +1977,10 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   margin-top: -14px;
 }
 
+.sgdbDesktopToolbar .sgdbResultsState {
+  margin: -8px 32px 4px;
+}
+
 .sgdbGrid {
   display: grid;
   padding: 10px 42px var(--gamepadui-current-footer-height, 34px);
@@ -1773,6 +1990,23 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   justify-content: space-evenly;
   grid-auto-flow: dense;
   box-sizing: border-box;
+}
+
+.sgdbDesktopToolbar .sgdbGrid {
+  justify-content: center;
+  padding: 14px 32px var(--gamepadui-current-footer-height, 34px);
+  row-gap: 32px;
+  column-gap: clamp(28px, 2.35vw, 48px);
+}
+
+.sgdbPopoutContent .sgdbGrid {
+  padding-right: 32px;
+  padding-bottom: 18px;
+  padding-left: 32px;
+}
+
+.sgdbPopoutContent .sgdbMoreButton {
+  margin-bottom: 12px;
 }
 
 .sgdbGrid.grid_p {
@@ -1785,7 +2019,7 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 
 .sgdbGrid.hero,
 .sgdbGrid.logo {
-  grid-template-columns: repeat(auto-fill, minmax(calc(33.33% - 10px), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--asset-size, 320px), 100%), var(--asset-size, 320px)));
 }
 
 .sgdbGrid.icon {
@@ -1902,8 +2136,9 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   width: 100%;
   max-width: 100%;
   max-height: 100%;
-  height: auto;
+  height: 100%;
   object-fit: cover;
+  object-position: center center;
   display: block;
   z-index: 1;
   margin: 0 auto;
@@ -2176,7 +2411,9 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 
 .sgdbDesktop .sgdbMoreButton {
   width: auto;
-  height: 34px;
+  height: 34px !important;
+  min-height: 34px !important;
+  flex: 0 0 34px;
   min-width: 0;
   margin: 14px auto 18px;
   padding: 0 28px;
@@ -2188,13 +2425,14 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 
 .sgdbDesktopToolbar .sgdb-asset-toolbar {
   display: grid;
-  grid-template-columns: max-content minmax(420px, 900px) max-content;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 16px;
-  justify-content: center;
-  min-height: 44px;
-  padding: 6px 24px;
-  background: #0e141b;
+  gap: 32px;
+  justify-content: stretch;
+  min-height: 50px;
+  padding: 0 46px;
+  background: transparent;
+  border: 0;
 }
 
 .sgdbDesktopToolbar .sgdb-asset-toolbar .filter-buttons {
@@ -2211,48 +2449,62 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   align-items: center;
   justify-content: center;
   width: auto;
-  height: 31px;
+  height: 32px;
   min-width: 0;
-  padding: 0 22px;
+  padding: 0 16px;
   border: 0;
   border-radius: 999px;
-  color: rgba(255, 255, 255, 0.9);
+  color: rgba(226, 231, 237, 0.82);
   background: transparent;
-  font-size: 12px;
+  font-size: 12.75px;
   font-weight: 700;
-  letter-spacing: 1px;
+  letter-spacing: 0.42px;
   line-height: 1;
+  text-transform: none;
   box-shadow: none;
 }
 
 .sgdbDesktopToolbar .sgdbFilterMainButton.selected,
+.sgdbDesktopToolbar .sgdbFilterMainButton:hover,
+.sgdbDesktopToolbar .sgdbFilterMainButton:focus-visible,
 .sgdbDesktopToolbar .sgdbResetButton:hover,
 .sgdbDesktopToolbar .sgdbResetButton:focus-visible {
-  color: #07111d;
-  background: #f8f8f4;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  color: #f3f5f7;
+  background: #30363d !important;
+  box-shadow: none !important;
 }
 
 .sgdbDesktopToolbar .sgdbGamepadFilterNotice {
-  min-height: 31px;
-  padding: 4px 24px 0;
+  min-height: 30px;
+  padding: 0 42px;
   background: transparent;
 }
 
 .sgdbDesktopToolbar .sgdbGamepadFilterToggles {
   justify-content: center;
-  gap: 8px;
+  gap: 30px;
 }
 
 .sgdbDesktopToolbar .sgdbFilterToggle {
   flex: 0 0 auto;
   width: auto;
-  height: 27px;
+  height: 32px;
   min-width: 0;
-  padding: 0 17px;
-  font-size: 11px;
+  padding: 0 16px;
+  color: rgba(226, 231, 237, 0.82);
+  background: transparent;
+  font-size: 12.75px;
   font-weight: 700;
-  letter-spacing: 0.9px;
+  letter-spacing: 0.42px;
+  box-shadow: none;
+}
+
+.sgdbDesktopToolbar .sgdbFilterToggle.selected,
+.sgdbDesktopToolbar .sgdbFilterToggle:hover,
+.sgdbDesktopToolbar .sgdbFilterToggle:focus-visible {
+  color: #f3f5f7;
+  background: #30363d !important;
+  box-shadow: none !important;
 }
 
 .sgdbDesktopToolbar .sgdbDesktopSliderWrap {
@@ -2260,7 +2512,7 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   display: flex;
   align-items: center;
   width: 100%;
-  height: 29px;
+  height: 30px;
   min-width: 0;
 }
 
@@ -2286,7 +2538,7 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   position: relative;
   z-index: 1;
   width: 100%;
-  height: 29px;
+  height: 30px;
   margin: 0;
   padding: 0;
   appearance: none;
@@ -2355,4 +2607,5 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 .sgdbDesktopToolbar .image-wrap.sgdbAsset.type-hero:focus-visible .sgdbChips span {
   transform: translateX(0);
 }
+
 `;
