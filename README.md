@@ -1,15 +1,30 @@
 # SteamGridDB for Millennium
 
-An early Millennium Port of the SteamGridDB plugin.
+SteamGridDB for Millennium is a Steam artwork browser and manager built for the Millennium plugin loader. It lets you search SteamGridDB from inside Steam, browse artwork by type, and apply new library assets without leaving the client.
 
-This version focuses on the core workflow:
+## Features
 
-- Search SteamGridDB games.
+- Search SteamGridDB games from inside Steam.
 - Browse grids, wide grids, heroes, logos, and icons.
-- Apply artwork to a Steam app through Steam's frontend artwork API.
-- Download Steam app icons into Steam's library cache through the Lua backend.
+- Apply artwork directly to Steam apps through Steam's frontend artwork APIs.
+- Download and apply Steam app icons through the Lua backend.
+- Reset custom artwork back to Steam defaults.
+- Big Picture/controller-friendly artwork browsing.
+- Theme-aware interface designed to blend with Fluenty-style dark Steam themes.
+- Configurable theme colors for background, selected/hover surfaces, slider track, and slider thumb.
+- Desktop popout view with a compact floating tab bar.
 
-The original plugin also includes context-menu routing, shortcut VDF icon editing, local file selection, invisible assets, logo positioning, square capsules, and recent-game capsule patches. Those are planned follow-up ports because Millennium exposes different frontend and backend integration points than the original loader.
+## Installation
+
+Download `SteamGridDB-Millennium.zip` from the latest GitHub release.
+
+Extract the zip so the `SteamGridDB` folder is placed in Steam's Millennium plugins directory:
+
+```text
+Steam/millennium/plugins/SteamGridDB
+```
+
+Restart Steam or reload Millennium plugins after installing.
 
 ## Building
 
@@ -18,8 +33,18 @@ pnpm install
 pnpm run build
 ```
 
-The production bundle is written to `.millennium/Dist/index.js`.
+The production bundle is written to:
+
+```text
+.millennium/Dist/index.js
+```
 
 ## Releases
 
-GitHub Actions builds the plugin on every `v*` tag and attaches `SteamGridDB-Millennium.zip` to the release. Extract the zip so the `SteamGridDB` folder is placed in Steam's `millennium/plugins` directory.
+GitHub Actions builds the plugin on every `v*` tag and attaches `SteamGridDB-Millennium.zip` to the release.
+
+## Credits
+
+Powered by artwork data from SteamGridDB.
+
+This plugin is based on the SteamGridDB artwork workflow and adapted for the Millennium plugin environment.
