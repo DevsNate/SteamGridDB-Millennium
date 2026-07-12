@@ -18,6 +18,7 @@ import {
   useParams,
 } from '@steambrew/client';
 import { Dispatch, FC, SetStateAction, useCallback, useEffect, useMemo, useState } from 'react';
+import type { CSSProperties } from 'react';
 import { GamepadView } from './views/GamepadView';
 
 declare const SteamClient: {
@@ -68,12 +69,20 @@ export type CurrentArtworkItem = {
   length?: number;
 };
 export type CurrentArtworkState = Partial<Record<SGDBAssetType, CurrentArtworkItem>>;
+type ThemeColorSettings = {
+  background: string;
+  surfaceHover: string;
+  sliderTrack: string;
+  sliderThumb: string;
+};
+
 type PluginSettings = {
   filterDefaults: FilterState;
   showExternalLinks: boolean;
   showCreatorNames: boolean;
   preloadPages: number;
   spaceThemeCompatibility: boolean;
+  themeColors: ThemeColorSettings;
 };
 
 type SGDBResponse<T> = {
@@ -90,6 +99,7 @@ type SGDBGame = {
 const sgdbRequest = callable<[{ path: string }], string | false>('sgdb_request');
 const downloadAsBase64 = callable<[{ url: string }], string | false>('download_as_base64');
 const setSteamIconFromUrl = callable<[{ appid: number; url: string; extension: string }], string | false>('set_steam_icon_from_url');
+const resetSteamIcon = callable<[{ appid: number }], string | false>('reset_steam_icon');
 const setAnimatedArtworkFromUrl = callable<[{ appid: number; asset_type: SGDBAssetType; url: string; extension: string }], string | false>('set_animated_artwork_from_url');
 const getCurrentArtwork = callable<[{ appid: number }], string | false>('get_current_artwork');
 const openExternalUrl = callable<[{ url: string }], boolean>('open_external_url');
@@ -192,12 +202,20 @@ const defaultFilters: FilterState = {
   epilepsy: true,
 };
 
+const defaultThemeColors: ThemeColorSettings = {
+  background: '#121212',
+  surfaceHover: '#1e1e1e',
+  sliderTrack: '#252525',
+  sliderThumb: '#3a3a3a',
+};
+
 const defaultSettings: PluginSettings = {
   filterDefaults: defaultFilters,
   showExternalLinks: true,
   showCreatorNames: true,
   preloadPages: 0,
   spaceThemeCompatibility: false,
+  themeColors: defaultThemeColors,
 };
 
 const defaultZoom: ZoomState = {
@@ -261,6 +279,21 @@ const isFilterState = (value: unknown): value is FilterState => {
   return (['static', 'animated', 'adult', 'humor', 'epilepsy'] as (keyof FilterState)[]).every((key) => typeof (value as Partial<FilterState>)[key] === 'boolean');
 };
 
+const normalizeHexColor = (value: unknown, fallback: string) => {
+  const text = String(value ?? '').trim();
+  return /^#[0-9a-fA-F]{6}$/.test(text) ? text.toLowerCase() : fallback;
+};
+
+const normalizeThemeColors = (colors: unknown): ThemeColorSettings => {
+  const saved = colors && typeof colors === 'object' ? colors as Partial<ThemeColorSettings> : {};
+  return {
+    background: normalizeHexColor(saved.background, defaultThemeColors.background),
+    surfaceHover: normalizeHexColor(saved.surfaceHover, defaultThemeColors.surfaceHover),
+    sliderTrack: normalizeHexColor(saved.sliderTrack, defaultThemeColors.sliderTrack),
+    sliderThumb: normalizeHexColor(saved.sliderThumb, defaultThemeColors.sliderThumb),
+  };
+};
+
 const filterStateByType = (fallback: FilterState): FilterStateByType => ({
   grid_p: { ...fallback },
   grid_l: { ...fallback },
@@ -294,6 +327,7 @@ const normalizeSettings = (settings: Partial<PluginSettings>): PluginSettings =>
   showCreatorNames: typeof settings.showCreatorNames === 'boolean' ? settings.showCreatorNames : defaultSettings.showCreatorNames,
   preloadPages: Math.max(0, Math.min(5, Number.isFinite(settings.preloadPages) ? Math.trunc(settings.preloadPages as number) : defaultSettings.preloadPages)),
   spaceThemeCompatibility: typeof settings.spaceThemeCompatibility === 'boolean' ? settings.spaceThemeCompatibility : defaultSettings.spaceThemeCompatibility,
+  themeColors: normalizeThemeColors(settings.themeColors),
 });
 
 const loadPluginSettings = (): PluginSettings => {
@@ -484,6 +518,13 @@ export const assetGridStyle = (assetType: SGDBAssetType, zoom: number) => {
   return { ['--asset-size' as string]: `${zoom}px` };
 };
 
+const themeColorRows: { key: keyof ThemeColorSettings; label: string }[] = [
+  { key: 'background', label: 'Background' },
+  { key: 'surfaceHover', label: 'Selected and hover surface' },
+  { key: 'sliderTrack', label: 'Slider track' },
+  { key: 'sliderThumb', label: 'Slider thumb' },
+];
+
 const SettingsView = ({
   settings,
   setSettings,
@@ -505,6 +546,23 @@ const SettingsView = ({
         filterDefaults: nextFilters,
       };
     });
+  };
+
+  const updateThemeColor = (key: keyof ThemeColorSettings, value: string) => {
+    setSettings((current) => ({
+      ...current,
+      themeColors: {
+        ...current.themeColors,
+        [key]: normalizeHexColor(value, current.themeColors[key]),
+      },
+    }));
+  };
+
+  const resetThemeColors = () => {
+    setSettings((current) => ({
+      ...current,
+      themeColors: defaultThemeColors,
+    }));
   };
 
   return (
@@ -581,6 +639,29 @@ const SettingsView = ({
           />
         </label>
       </section>
+
+      <section className="sgdbSettingsSection">
+        <div className="sgdbSettingsHeaderRow">
+          <h2>Theme Colors</h2>
+          <button className="sgdbSettingsResetButton sgdbTextPill" type="button" onClick={resetThemeColors}>
+            Reset
+          </button>
+        </div>
+        {themeColorRows.map(({ key, label }) => (
+          <label className="sgdbSettingsRow sgdbSettingsColorRow" key={key}>
+            <span>{label}</span>
+            <span className="sgdbColorControl">
+              <span className="sgdbColorValue">{settings.themeColors[key]}</span>
+              <input
+                type="color"
+                value={settings.themeColors[key]}
+                onChange={(event) => updateThemeColor(key, event.currentTarget.value)}
+                aria-label={label}
+              />
+            </span>
+          </label>
+        ))}
+      </section>
     </div>
   );
 };
@@ -617,6 +698,12 @@ const SteamGridDBContent = ({
   const zoomModeKey = isGamepadUI ? 'gamepad' : 'desktop';
   const zoomByType = zoomByMode[zoomModeKey];
   const filters = filtersByType[assetType] ?? settings.filterDefaults;
+  const rootStyle = {
+    '--sgdb-bg': settings.themeColors.background,
+    '--sgdb-surface-hover': settings.themeColors.surfaceHover,
+    '--sgdb-slider-track': settings.themeColors.sliderTrack,
+    '--sgdb-slider-thumb': settings.themeColors.sliderThumb,
+  } as CSSProperties;
 
   useEffect(() => {
     window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
@@ -865,12 +952,17 @@ const SteamGridDBContent = ({
       return;
     }
 
-    if (type === 'icon') {
-      notice('Icon Reset Not Available', 'Steam icon reset needs a separate cache restore path.');
-      return;
-    }
-
     try {
+      if (type === 'icon') {
+        const removed = await resetSteamIcon({ appid: appId });
+        if (removed === false) {
+          throw new Error('Icon cache reset failed.');
+        }
+        notice('Icon Reset', 'Restart Steam if the icon does not refresh.');
+        void refreshCurrentArtwork();
+        return;
+      }
+
       await SteamClient.Apps.ClearCustomArtworkForApp(appId, ASSET_TYPE[type]);
       notice('Artwork Reset', `${ASSET_LABEL[type]} was reset to default.`);
       void refreshCurrentArtwork();
@@ -913,13 +1005,11 @@ const SteamGridDBContent = ({
     loadAssets,
     resetCurrentTab,
     resetArtwork,
-    currentArtwork,
-    refreshCurrentArtwork,
     isGamepadUI,
   };
 
   return (
-    <div className={`sgdbRoot sgdbGamepad ${settings.spaceThemeCompatibility ? 'sgdbSpaceThemeCompat' : ''} ${isGamepadUI ? '' : 'sgdbDesktopToolbar'} ${popout ? 'sgdbPopoutContent' : ''}`} id="sgdb-wrap">
+    <div className={`sgdbRoot sgdbGamepad ${isGamepadUI ? 'sgdbBigPicture' : 'sgdbDesktopToolbar'} ${settings.spaceThemeCompatibility ? 'sgdbSpaceThemeCompat' : ''} ${popout ? 'sgdbPopoutContent' : ''}`} id="sgdb-wrap" style={rootStyle}>
       <style>{styles}</style>
       {hasAppId ? <GamepadView {...viewProps} /> : <SettingsView settings={settings} setSettings={setSettings} />}
     </div>
@@ -1105,23 +1195,72 @@ window.__SGDB_CONTEXT_MENU_PATCH__ = patchLibraryContextMenu();
 
 const styles = `
 .sgdbRoot {
+  position: relative;
   height: 100%;
   min-height: 0;
   margin-top: var(--basicui-header-height, 40px);
   padding: 0;
-  background:
-    radial-gradient(1180px 760px at 52% 16%, rgba(17, 29, 38, 0.36), rgba(7, 12, 17, 0.18) 54%, transparent 84%),
-    linear-gradient(180deg, #05080b 0, #060a0e 96px, #070d12 210px, #091017 100%);
+  --sgdb-bg: #121212;
+  --sgdb-bg-deep: rgb(var(--dark-14, 5, 8, 11));
+  --sgdb-bg-mid: rgb(var(--dark-19, 7, 13, 18));
+  --sgdb-surface: rgb(var(--dark-20, 16, 24, 32));
+  --sgdb-panel: rgba(var(--fluenty-gray-1e, 30, 30, 30), 0.94);
+  --sgdb-panel-solid: rgb(var(--fluenty-gray-1e, 30, 30, 30));
+  --sgdb-control: rgba(var(--fluenty-gray-2b, 43, 43, 43), 0.52);
+  --sgdb-surface-hover: #1e1e1e;
+  --sgdb-overlay: rgba(var(--fluenty-black, 0, 0, 0), 0.42);
+  --sgdb-text: rgb(var(--fluenty-gray-f3, 243, 245, 247));
+  --sgdb-text-strong: rgb(var(--fluenty-gray-f7, 247, 249, 251));
+  --sgdb-text-muted: #9a9a9a;
+  --sgdb-text-control: #b8b8b8;
+  --sgdb-border: #333333;
+  --sgdb-border-soft: #2c2c2c;
+  --sgdb-slider-track: #252525;
+  --sgdb-slider-thumb: #3a3a3a;
+  --sgdb-accent: var(--accent-col, #1a9fff);
+  --sgdb-accent-soft: var(--accent-secondary, #8fcfff);
+  --sgdb-accent-text: #07111d;
+  --sgdb-noise: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAACXBIWXMAAAABAAAAAQBPJcTWAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAU6SURBVHicTZeJUsIwEIaTEhC8EfX9X8NHEm+sCIKN8639Os1Mp5Ds8e+ZbX54eCjT6TSxaq1psVikx8fHdHJykm5ubupms8mz2Szt9/uUcw4aVtd18f/8/Dz9/Pyk4/GYrq6u0m63S03TpO/v76DljczD4RD0p6enIauUkiaTSSowIuDs7CwYf39/02q1Csa2bTNMCJ3P5wmgCFosFnW73WYEf3x8pIuLi5CBYGUBEODws1CIDPgxjjfyCij4gWIYUcwej8JkxCJo9/t95hxaQLNQBg1ytJA9eL++vgbj4Mdo+AFZQI+FKNNN2+02XAUzRCh2HwH8R4CC4BMQSqETCGGBHhpAQcMZstFZIAId7uQAhbpaL/BwhkKE8KAEwQpHoDnC+eXlZfBhvVazz9uQlVJqERkWbzabEECMPj8/QyggEAwN4YCeB+DX19cBGHCG0pjjVX5zZsIBGg+5V0rJhQ1QmdUmCYD6hAtgegZGhJP9JhdnyGCNKwrPcs5Cth7Sa23bpmKGq4Cnd08Q4kIAiRo6wPHWE8vlMspVT6CIfZ77+/uwHEOIv9URCVjKfw4QL+ucAxiIky7FAxCb3QDGA+v1OsBMJpPMHha/v78HCM7hDyv72GOQucJZgMA6vKDFMENk6bFADzF70PAbHoSgFI8BGqXL5TK8Ba+h4T90lrLlHB6AyXp+enoKbyAE18PMf6vDOFsdeoXkxBOAwiCFmzvIIKl5y89CB42oTqfT6HgIsgT1iI2JPRMWpYbHRkRJ0R0Rihy8xgIYyqG1WxJe5EWSrtfrDJFlhgIOrAiYTCysMXlcdriu6yIPKE2bGt5FHm/vCGRZogHAy8QyESmHVoUxHFk7XEgkGedYrNsxxJoHlMo1Eh68G0mNAvOADWMEo8K9oLz1ZrNZpYm8vr4OzQkas3zcCVFuKRMKHs7RG7Qo87Jgw0QbZznMWIR3+gSMmsdClGKA4eHBC4YNEHrNHBrnV0GwFwvxe3t7Gy4lrfFeMObQco7bbTqAVY7XsHmEHJuUb++eAkKSkGW22tdRhicG4v4isqbt8bZdlI/B8sZ7litNiv/QPz8/RzUUFDJUoAQwxlG3OTjwGCostOdbKezZ1lEGYPKAcNhtb29vI5TmRCQhihGKFwSAMNsnhCwbj93QxmKiYUg/lNT5fB79wOoiUZETMS9lCF9UhvVoHEEOSi8oCG2fAHLY0FKE4konHJoaiu2gKDYkKoeedyRk27a11ppJwPHoRAmaWDBaZgAilvy/u7sLekCNyxfhdlCver3Zl2ylkgKUTLrY3o11Dh+4G/eCHOX8tnfwBozJ6/Cix3C/Uxerb0JD9y1mMcJA6AiuMM4gRrFXrvMfwl9eXgYvqUTXe5t6s5IrzAfIdw4tXhqr1aoej8esAgX5G+tBb8vFK+aKVnvdAs7Zj7B6kVnG3hVxazL7990sg5r2CmNfGRErEPORwoVjZjsV2WwcwzhHjrG3n3iJmbj9IJMKtYk11q7tsm8o2WQEqAmKAPg48x7gjVAe9m1g9BiAES55LfWYlkwwr2HnP2d+u6BDia6jk9lBDRU8TlN+qPjdIXhv2WHM77rOkqlN08Rg4uBoPthyVWLMrW2HmPHU5Og2Hlo01FzCKzGWN01TD4dD1KW17vTiBGuZ4jFGNpsSFmqAk5VlqPekdYqCf5DZ/A+V2bjDyOeUngGAHxN+AVs5gDG+u90ukhkemppXOrT0CpLbr2T1RCs2KZxuIbJ0sE7Fjmb8tquZI+O+YVXg5v688jHrWMaCnjwhh/4Alxekc0HT9AYAAAAASUVORK5CYII=');
+  background: var(--sgdb-bg);
   overflow-x: hidden;
   box-sizing: border-box;
   overscroll-behavior: contain;
-  box-shadow: 0 calc(-1 * var(--basicui-header-height, 40px)) 0 #0a1218;
+  box-shadow: 0 calc(-1 * var(--basicui-header-height, 40px)) 0 var(--sgdb-bg);
   --asset-size: 120px;
+}
+
+.sgdbRoot::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: var(--sgdb-noise);
+  opacity: 0.24;
+  pointer-events: none;
+}
+
+.sgdbRoot > * {
+  position: relative;
+  z-index: 1;
 }
 
 .sgdbRoot div[class*="gamepadtabbedpage_TabHeaderRowWrapper"][class*="gamepadtabbedpage_Floating"],
 .sgdbRoot div[class*="gamepadtabbedpage_TabHeaderRowWrapper"] {
   background: transparent;
+}
+
+body:has(#sgdb-wrap),
+body:has(#sgdb-wrap) [class*="FullModal"],
+body:has(#sgdb-wrap) [class*="DialogContent"],
+body:has(#sgdb-wrap) [class*="GamepadDialogContent"],
+body:has(#sgdb-wrap) [class*="ModalPosition"] {
+  background: var(--sgdb-bg) !important;
+}
+
+body:has(#sgdb-wrap.sgdbDesktopToolbar.sgdbPopoutContent) [class*="FullModal"],
+body:has(#sgdb-wrap.sgdbDesktopToolbar.sgdbPopoutContent) [class*="DialogContent"],
+body:has(#sgdb-wrap.sgdbDesktopToolbar.sgdbPopoutContent) [class*="ModalPosition"] {
+  background: transparent !important;
 }
 
 .sgdbDesktop {
@@ -1130,10 +1269,8 @@ const styles = `
 
 .sgdbDesktopToolbar {
   position: relative;
-  box-shadow: 0 calc(-1 * var(--basicui-header-height, 40px)) 0 #0a1218;
-  background:
-    radial-gradient(1180px 760px at 52% 16%, rgba(17, 29, 38, 0.36), rgba(7, 12, 17, 0.18) 54%, transparent 84%),
-    linear-gradient(180deg, #05080b 0, #060a0e 96px, #070d12 210px, #091017 100%);
+  box-shadow: 0 calc(-1 * var(--basicui-header-height, 40px)) 0 var(--sgdb-bg);
+  background: var(--sgdb-bg);
 }
 
 .sgdbPopoutContent {
@@ -1143,10 +1280,12 @@ const styles = `
   margin-top: 0;
   padding: 0;
   overflow: hidden;
-  box-shadow: none;
-  background:
-    radial-gradient(1180px 760px at 52% 16%, rgba(17, 29, 38, 0.36), rgba(7, 12, 17, 0.18) 54%, transparent 84%),
-    linear-gradient(180deg, #05080b 0, #060a0e 96px, #070d12 210px, #091017 100%);
+  box-shadow: inset 0 0 0 1px var(--sgdb-border);
+  background: var(--sgdb-bg);
+}
+
+.sgdbDesktopToolbar.sgdbPopoutContent {
+  background: transparent;
 }
 
 .sgdbPopoutContent .tabcontents-wrap {
@@ -1156,6 +1295,11 @@ const styles = `
   overflow-y: auto;
   scrollbar-gutter: stable;
   box-sizing: border-box;
+  background: var(--sgdb-bg);
+}
+
+.sgdbDesktopToolbar.sgdbPopoutContent .tabcontents-wrap {
+  padding-top: 56px;
 }
 
 .sgdbPopoutContent .tabcontents-wrap::-webkit-scrollbar {
@@ -1172,17 +1316,17 @@ const styles = `
   min-height: 48px;
   border: 2px solid transparent;
   border-radius: 999px;
-  background: rgba(139, 153, 170, 0.28);
+  background: color-mix(in srgb, var(--sgdb-text-muted) 28%, transparent);
   background-clip: padding-box;
 }
 
 .sgdbPopoutContent .tabcontents-wrap:hover::-webkit-scrollbar-thumb {
-  background: rgba(139, 153, 170, 0.62);
+  background: color-mix(in srgb, var(--sgdb-text-muted) 62%, transparent);
   background-clip: padding-box;
 }
 
 .sgdbPopoutContent .tabcontents-wrap::-webkit-scrollbar-thumb:hover {
-  background: rgba(191, 202, 215, 0.78);
+  background: color-mix(in srgb, var(--sgdb-text) 78%, transparent);
   background-clip: padding-box;
 }
 
@@ -1197,7 +1341,7 @@ body:has(#sgdb-wrap) [class*="closeButton"] {
   min-height: 36px !important;
   position: relative !important;
   z-index: 20 !important;
-  color: #8b98a5 !important;
+  color: var(--sgdb-text-control) !important;
   background: transparent !important;
   box-shadow: none !important;
 }
@@ -1226,7 +1370,7 @@ body:has(#sgdb-wrap) button[aria-label="Close"]:hover,
 body:has(#sgdb-wrap) button[title="Close"]:hover,
 body:has(#sgdb-wrap) [class*="CloseButton"]:hover,
 body:has(#sgdb-wrap) [class*="closeButton"]:hover {
-  color: #dfe3ea !important;
+  color: var(--sgdb-text) !important;
   background: rgba(255, 255, 255, 0.06) !important;
 }
 
@@ -1235,7 +1379,7 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   align-items: center;
   gap: 10px;
   padding: 14px 30px;
-  background: #101820;
+  background: var(--sgdb-surface);
   box-sizing: border-box;
 }
 
@@ -1243,12 +1387,14 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   width: auto;
   min-width: auto;
   padding: 12px 16px;
+  border: 1px solid transparent;
   font-weight: 700;
 }
 
 .sgdbManualTabs button.selected {
-  color: #07111d;
-  background: #1a9fff;
+  color: var(--sgdb-text);
+  border-color: var(--sgdb-border-soft);
+  background: var(--sgdb-surface-hover);
 }
 
 .sgdbPopoutContent .sgdbManualTabs {
@@ -1277,10 +1423,10 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: 999px;
   clip-path: inset(0 round 999px);
-  color: rgba(255, 255, 255, 0.9);
+  color: var(--sgdb-text-control);
   background: transparent;
   outline: 0;
   box-shadow: none;
@@ -1292,9 +1438,24 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 }
 
 .sgdbTextPill.selected {
-  color: #f7f9fb;
-  background: #2e333a;
+  color: var(--sgdb-text-strong);
+  border: 1px solid var(--sgdb-border-soft);
+  background: var(--sgdb-surface-hover);
   box-shadow: none;
+}
+
+.sgdbTextPill::before,
+.sgdbTextPill::after,
+.sgdbTextPill.selected::before,
+.sgdbTextPill.selected::after,
+.sgdbTextPill [class*="Focus"],
+.sgdbTextPill [class*="focus"],
+.sgdbTextPill [class*="Highlight"],
+.sgdbTextPill [class*="highlight"] {
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: 0 !important;
 }
 
 .sgdbTextPill.gpfocus,
@@ -1332,23 +1493,26 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 }
 
 .sgdbGamepad .sgdbGamepadTabs {
+  --sgdb-tab-vertical-gap: 18px;
   justify-content: center;
   gap: 32px;
-  min-height: 54px;
-  padding: 3px 56px 0;
+  min-height: calc(32px + var(--sgdb-tab-vertical-gap));
+  padding: var(--sgdb-tab-vertical-gap) 56px 0;
   background: transparent;
   border-bottom: 0;
+  scroll-margin-top: 14px;
 }
 
 .sgdbGamepad .sgdbGamepadTab {
   width: auto;
   min-width: 0;
   height: 32px;
-  margin-top: 4px;
+  margin-top: 0;
   padding: 0 16px;
+  border: 1px solid transparent;
   --gpFocusBorderRadius: 999px;
   --focus-ring-border-radius: 999px;
-  color: rgba(226, 231, 237, 0.82);
+  color: var(--sgdb-text-control);
   background: transparent;
   font-size: 12.75px;
   font-weight: 700;
@@ -1365,20 +1529,22 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 }
 
 .sgdbGamepad .sgdbGamepadTab.selected {
-  color: #f3f5f7;
-  background: #30363d;
+  color: var(--sgdb-text);
+  border: 1px solid var(--sgdb-border-soft);
+  background: var(--sgdb-surface-hover);
   box-shadow: none;
 }
 
 .sgdbGamepad .sgdbGamepadTab.selected.contentFocus {
-  color: #f3f5f7;
-  background: #30363d;
+  color: var(--sgdb-text);
+  border: 1px solid var(--sgdb-border-soft);
+  background: var(--sgdb-surface-hover);
 }
 
 .sgdbGamepad .sgdbGamepadTab:not(.selected):hover,
 .sgdbGamepad .sgdbGamepadTab:not(.selected):focus-visible,
 .sgdbGamepad .sgdbGamepadTab:not(.selected).gpfocus {
-  color: rgba(242, 246, 250, 0.86);
+  color: #e0e0e0;
   background: transparent !important;
   box-shadow: none !important;
 }
@@ -1419,41 +1585,64 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 .sgdbGamepad .sgdbGamepadTab div {
   border-radius: 999px !important;
   clip-path: inset(0 round 999px) !important;
+  background: transparent !important;
+  box-shadow: none !important;
 }
 
 .sgdbGamepad .sgdbGamepadTab.selected.tabFocus:hover,
 .sgdbGamepad .sgdbGamepadTab.selected.tabFocus.gpfocus,
 .sgdbGamepad .sgdbGamepadTab.selected.tabFocus:focus-visible {
-  color: #f3f5f7;
-  background: #30363d;
+  color: var(--sgdb-text);
+  background: var(--sgdb-surface-hover);
   box-shadow: none;
 }
 
 .sgdbGamepad .sgdbGamepadTab.selected.contentFocus:hover,
 .sgdbGamepad .sgdbGamepadTab.selected.contentFocus.gpfocus,
 .sgdbGamepad .sgdbGamepadTab.selected.contentFocus:focus-visible {
-  color: #f3f5f7;
-  background: #30363d;
+  color: var(--sgdb-text);
+  background: var(--sgdb-surface-hover);
   box-shadow: none;
 }
 
 .sgdbSettingsPage {
   width: min(680px, calc(100% - 48px));
   margin: 24px auto;
-  color: #dfe3ea;
+  color: var(--sgdb-text);
 }
 
 .sgdbSettingsSection {
   padding: 18px 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid var(--sgdb-border-soft);
 }
 
 .sgdbSettingsSection h2 {
   margin: 0 0 14px;
-  color: #f1f5f9;
+  color: var(--sgdb-text-strong);
   font-size: 18px;
   font-weight: 900;
   letter-spacing: 0.8px;
+}
+
+.sgdbSettingsHeaderRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 0 8px;
+}
+
+.sgdbSettingsHeaderRow h2 {
+  margin-bottom: 0;
+}
+
+.sgdbSettingsResetButton {
+  width: auto;
+  min-width: 72px;
+  height: 30px;
+  padding: 0 14px;
+  font-size: 12px;
+  letter-spacing: 0.5px;
 }
 
 .sgdbSettingsToggleGrid {
@@ -1477,7 +1666,7 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   align-items: center;
   gap: 20px;
   min-height: 42px;
-  color: #dfe3ea;
+  color: var(--sgdb-text);
   font-size: 15px;
   font-weight: 700;
 }
@@ -1491,15 +1680,55 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   width: 72px;
   height: 32px;
   padding: 0 8px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  border: 1px solid var(--sgdb-border);
   border-radius: 4px;
-  color: #f1f5f9;
-  background: rgba(255, 255, 255, 0.08);
+  color: var(--sgdb-text-strong);
+  background: var(--sgdb-border-soft);
   font-size: 15px;
   font-weight: 700;
 }
 
+.sgdbSettingsColorRow {
+  min-height: 46px;
+}
+
+.sgdbColorControl {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sgdbColorValue {
+  min-width: 74px;
+  color: var(--sgdb-text-muted);
+  font-family: monospace;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: right;
+  text-transform: uppercase;
+}
+
+.sgdbColorControl input[type="color"] {
+  width: 42px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--sgdb-border);
+  border-radius: 5px;
+  background: var(--sgdb-surface-hover);
+  cursor: pointer;
+}
+
+.sgdbColorControl input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 3px;
+}
+
+.sgdbColorControl input[type="color"]::-webkit-color-swatch {
+  border: 0;
+  border-radius: 3px;
+}
+
 .tabcontents-wrap {
+  position: relative;
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -1507,12 +1736,56 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   background: transparent;
 }
 
-.sgdbGamepadTabs + .tabcontents-wrap {
-  margin-top: -16px;
+.sgdbBigPicture .sgdbGamepadTabs + .tabcontents-wrap {
+  margin-top: 0;
 }
 
 .sgdbPopoutContent .sgdbGamepadTabs + .tabcontents-wrap {
   margin-top: 0;
+}
+
+.sgdbDesktopToolbar.sgdbPopoutContent .sgdbGamepadTabs + .tabcontents-wrap {
+  margin-top: 0;
+}
+
+.sgdbDesktopToolbar.sgdbPopoutContent .sgdbGamepadTabs {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  z-index: 5;
+  width: max-content;
+  max-width: calc(100% - 96px);
+  min-height: 56px;
+  padding: 0 28px;
+  background: transparent;
+  transform: translateX(-50%);
+  isolation: isolate;
+}
+
+.sgdbDesktopToolbar.sgdbPopoutContent .sgdbGamepadTabs::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  z-index: 0;
+  height: 48px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--sgdb-bg);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.24);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.sgdbDesktopToolbar.sgdbPopoutContent .sgdbGamepadTab {
+  position: relative;
+  z-index: 1;
+}
+
+.sgdbDesktopToolbar.sgdbPopoutContent .sgdb-asset-toolbar {
+  margin-top: 0;
+  margin-bottom: 0;
 }
 
 .spinnyboi {
@@ -1522,7 +1795,7 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   position: fixed;
   inset: 0;
   z-index: 10008;
-  background: #0e141b;
+  background: var(--sgdb-bg);
   opacity: 1;
   transition: opacity 250ms ease-out, z-index 0s;
 }
@@ -1583,14 +1856,116 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   width: auto;
 }
 
+.sgdbGamepad .sgdbDesktopSliderWrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 30px;
+  min-width: 0;
+  border-radius: 999px;
+}
+
+.sgdbGamepad .sgdbDesktopSliderWrap::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 6px;
+  border-radius: 999px;
+  transform: translateY(-50%);
+  background: linear-gradient(
+    90deg,
+    var(--sgdb-slider-thumb) 0%,
+    var(--sgdb-slider-thumb) var(--sgdb-slider-progress),
+    var(--sgdb-slider-track) var(--sgdb-slider-progress),
+    var(--sgdb-slider-track) 100%
+  );
+}
+
+.sgdbGamepad .sgdbControllerSliderThumb {
+  position: absolute;
+  left: var(--sgdb-slider-progress);
+  top: 50%;
+  z-index: 2;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--sgdb-text-control);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.sgdbGamepad .sgdbDesktopSlider {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 30px;
+  margin: 0;
+  padding: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  outline: 0;
+  cursor: pointer;
+}
+
+.sgdbGamepad .sgdbDesktopSlider::-webkit-slider-runnable-track {
+  height: 6px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.sgdbGamepad .sgdbDesktopSlider::-webkit-slider-thumb {
+  width: 14px;
+  height: 14px;
+  margin-top: -4px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--sgdb-text-control);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.sgdbGamepad .sgdbDesktopSlider:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5);
+}
+
+.sgdbGamepad .sgdbSliderFocusable.gpfocus::after,
+.sgdbGamepad .sgdbSliderFocusable:focus-visible::after {
+  content: '';
+  position: absolute;
+  inset: 6px -10px;
+  border: 1px solid var(--sgdb-border-soft);
+  border-radius: 999px;
+  background: var(--sgdb-surface-hover);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.sgdbGamepad .sgdbSliderFocusable.gpfocus::before,
+.sgdbGamepad .sgdbSliderFocusable:focus-visible::before {
+  z-index: 1;
+}
+
+.sgdbGamepad .sgdbSliderFocusable.gpfocus .sgdbDesktopSlider,
+.sgdbGamepad .sgdbSliderFocusable:focus-visible .sgdbDesktopSlider {
+  z-index: 2;
+}
+
 .sgdbGamepad .sgdbFilterMainButton,
 .sgdbGamepad .sgdbResetButton {
   width: auto;
   height: 32px;
   min-width: 0;
   padding: 0 16px;
+  border: 1px solid transparent;
   border-radius: 999px;
-  color: rgba(226, 231, 237, 0.82);
+  color: var(--sgdb-text-control);
   background: transparent;
   font-size: 12.75px;
   font-weight: 700;
@@ -1608,9 +1983,30 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 .sgdbGamepad .sgdbResetButton:hover,
 .sgdbGamepad .sgdbResetButton.gpfocus,
 .sgdbGamepad .sgdbResetButton:focus-visible {
-  color: #f3f5f7;
-  background: #30363d !important;
+  color: var(--sgdb-text);
+  border: 1px solid var(--sgdb-border-soft);
+  background: var(--sgdb-surface-hover) !important;
   box-shadow: none !important;
+}
+
+.sgdbGamepad .sgdbFilterMainButton::before,
+.sgdbGamepad .sgdbFilterMainButton::after,
+.sgdbGamepad .sgdbResetButton::before,
+.sgdbGamepad .sgdbResetButton::after,
+.sgdbGamepad .sgdbFilterToggle::before,
+.sgdbGamepad .sgdbFilterToggle::after,
+.sgdbGamepad .sgdbMoreButton::before,
+.sgdbGamepad .sgdbMoreButton::after,
+.sgdbDesktopToolbar .sgdbFilterMainButton::before,
+.sgdbDesktopToolbar .sgdbFilterMainButton::after,
+.sgdbDesktopToolbar .sgdbResetButton::before,
+.sgdbDesktopToolbar .sgdbResetButton::after,
+.sgdbDesktopToolbar .sgdbFilterToggle::before,
+.sgdbDesktopToolbar .sgdbFilterToggle::after {
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: 0 !important;
 }
 
 .sgdbSliderWithMarks {
@@ -1634,9 +2030,9 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   height: 32px;
   min-width: 0;
   padding: 0 16px;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: 999px;
-  color: rgba(226, 231, 237, 0.82);
+  color: var(--sgdb-text-control);
   background: transparent;
   font-size: 12.75px;
   font-weight: 700;
@@ -1676,7 +2072,7 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 
 .sgdbGamepad .sgdbFilterNoticeLine {
   height: 1px;
-  background: rgba(255, 255, 255, 0.24);
+  background: var(--sgdb-border);
 }
 
 .sgdbGamepad .sgdbFilterNoticeText {
@@ -1696,10 +2092,10 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   height: 24px;
   min-width: 24px;
   padding: 0;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: 50%;
-  color: #16202a;
-  background: #f1f3f5;
+  color: var(--sgdb-accent-text);
+  background: var(--sgdb-text);
   font-size: 18px;
   font-weight: 900;
   line-height: 1;
@@ -1717,7 +2113,8 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   height: 32px;
   min-width: 0;
   padding: 0 16px;
-  color: rgba(226, 231, 237, 0.82);
+  border: 1px solid transparent;
+  color: var(--sgdb-text-control);
   background: transparent;
   font-size: 12.75px;
   font-weight: 700;
@@ -1731,8 +2128,9 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 .sgdbGamepad .sgdbFilterToggle:hover,
 .sgdbGamepad .sgdbFilterToggle.gpfocus,
 .sgdbGamepad .sgdbFilterToggle:focus-visible {
-  color: #f3f5f7;
-  background: #30363d !important;
+  color: var(--sgdb-text);
+  border: 1px solid var(--sgdb-border-soft);
+  background: var(--sgdb-surface-hover) !important;
   box-shadow: none !important;
 }
 
@@ -1743,13 +2141,15 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   min-height: 32px !important;
   flex: 0 0 32px;
   padding: 0 16px;
-  margin: 4px auto var(--gamepadui-current-footer-height, 24px);
-  color: rgba(226, 231, 237, 0.82);
+  border: 1px solid transparent;
+  margin: 24px auto 24px;
+  color: var(--sgdb-text-control);
   background: transparent;
   font-size: 12.75px;
   font-weight: 700;
   letter-spacing: 0.42px;
   text-transform: uppercase;
+  scroll-margin-bottom: 14px;
   -webkit-font-smoothing: antialiased;
   text-rendering: geometricPrecision;
   box-shadow: none;
@@ -1758,238 +2158,70 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 .sgdbGamepad .sgdbMoreButton:hover,
 .sgdbGamepad .sgdbMoreButton.gpfocus,
 .sgdbGamepad .sgdbMoreButton:focus-visible {
-  color: #f3f5f7;
-  background: #30363d !important;
+  color: var(--sgdb-text);
+  border: 1px solid var(--sgdb-border-soft);
+  background: var(--sgdb-surface-hover) !important;
   box-shadow: none !important;
 }
 
-.sgdbManageGrid {
-  display: grid;
-  grid-template-columns: 420px minmax(0, 1fr) 164px;
-  grid-template-areas:
-    "grid wide wide"
-    "grid logo icon"
-    "hero hero hero";
-  gap: 14px 32px;
+.sgdbGamepad .sgdbMoreRevealSpacer {
+  flex: 0 0 max(16px, calc(var(--gamepadui-current-footer-height, 24px) / 2));
   width: 100%;
-  padding: 14px 32px 28px;
-  box-sizing: border-box;
-  align-items: start;
-}
-
-.sgdbManagePanel {
-  min-width: 0;
-}
-
-.sgdbManagePanel h2 {
-  margin: 0 0 7px;
-  color: rgba(242, 246, 250, 0.9);
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: 2.4px;
-  line-height: 1.1;
-  text-transform: uppercase;
-  -webkit-font-smoothing: antialiased;
-  text-rendering: geometricPrecision;
-}
-
-.sgdbManagePanelCapsule {
-  grid-area: grid;
-}
-
-.sgdbManagePanelWide {
-  grid-area: wide;
-}
-
-.sgdbManagePanelLogo {
-  grid-area: logo;
-}
-
-.sgdbManagePanelHero {
-  grid-area: hero;
-  margin-top: 40px;
-}
-
-.sgdbManagePanelIcon {
-  grid-area: icon;
-  margin-top: 0;
-}
-
-.sgdbManagePreview,
-.sgdbManageMissing {
-  display: grid;
-  position: relative;
-  place-items: center;
-  overflow: hidden;
-  width: 100%;
-  border: 1px solid rgba(156, 171, 186, 0.72);
-  color: #8f98a8;
-  background: rgba(5, 10, 15, 0.5);
-  box-sizing: border-box;
-}
-
-.sgdbManagePreview.type-grid_p {
-  aspect-ratio: auto;
-  width: 420px;
-  height: 630px;
-}
-
-.sgdbManagePreview.type-grid_l {
-  width: 100%;
-  height: 450px;
-}
-
-.sgdbManagePreview.type-logo {
-  width: 100%;
-  height: 140px;
-  min-height: 0;
-}
-
-.sgdbManagePreview.type-hero {
-  width: 100%;
-  height: 450px;
-}
-
-.sgdbManagePreview.type-icon {
-  width: 140px;
-  height: 140px;
-  max-width: 100%;
-  justify-self: center;
-}
-
-.sgdbManageImage {
-  display: block;
-  width: 100%;
-  height: 100%;
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
-  object-position: center;
-}
-
-.sgdbManageImage.type-logo {
-  width: min(340px, calc(100% - 18px)) !important;
-  height: calc(100% - 18px) !important;
-  max-width: min(340px, calc(100% - 18px)) !important;
-  max-height: calc(100% - 18px) !important;
-  object-fit: contain !important;
-  padding: 0;
-  box-sizing: border-box;
-}
-
-.sgdbManageImage.type-icon {
-  max-width: calc(100% - 44px);
-  max-height: calc(100% - 44px);
-  padding: 0;
-  box-sizing: border-box;
-}
-
-.sgdbManageResetButton {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  z-index: 4;
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.58);
-  border-right-width: 0;
-  border-bottom-width: 0;
-  border-radius: 5px 0 0 0;
-  color: rgba(255, 255, 255, 0.94);
-  background: rgba(7, 10, 15, 0.86);
-  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.24);
-  cursor: pointer;
-  opacity: 0;
-  transform: translateY(6px);
-  transition: opacity 120ms ease, transform 120ms ease, background 120ms ease;
-}
-
-.sgdbManagePreview:hover .sgdbManageResetButton,
-.sgdbManagePreview.gpfocus .sgdbManageResetButton,
-.sgdbManagePreview:focus-within .sgdbManageResetButton {
-  opacity: 1;
-  transform: translateY(0);
-}
-
-.sgdbManageResetButton:hover,
-.sgdbManageResetButton:focus-visible {
-  background: rgba(12, 18, 26, 0.96);
-  outline: 0;
-}
-
-.sgdbManageResetButton .sgdbExternalIcon {
-  width: 21px;
-  height: 21px;
-  stroke-width: 2.25;
-}
-
-.sgdbManageMissing {
-  min-height: 96px;
-  font-size: 15px;
-  font-weight: 700;
-}
-
-.sgdbManagePanelCapsule .sgdbManageMissing {
-  aspect-ratio: auto;
-  width: 420px;
-  height: 630px;
-  min-height: 0;
-}
-
-.sgdbManagePanelWide .sgdbManageMissing {
-  width: 100%;
-  height: 450px;
-}
-
-.sgdbManagePanelLogo .sgdbManageMissing {
-  width: 100%;
-  height: 140px;
-  min-height: 0;
-}
-
-.sgdbManagePanelHero .sgdbManageMissing {
-  width: 100%;
-  height: 450px;
-}
-
-.sgdbManagePanelIcon .sgdbManageMissing {
-  width: 140px;
-  height: 140px;
-  justify-self: center;
+  pointer-events: none;
 }
 
 .sgdbResultsState {
   align-self: flex-start;
-  margin: -10px 30px 2px;
+  margin: 6px 30px 8px;
   padding: 0;
   border: 0;
-  color: #8f98a8;
+  color: var(--sgdb-text-muted);
   background: transparent;
-  cursor: pointer;
   font-size: 16px;
   text-align: left;
+  pointer-events: none;
+  user-select: none;
 }
 
-.sgdbGamepad .sgdbGamepadFilterNotice + .sgdbResultsState {
-  margin-top: -14px;
+.sgdbBigPicture .sgdbResultsState {
+  position: absolute;
+  top: var(--sgdb-tab-vertical-gap, 18px);
+  left: 30px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  height: 32px;
+  margin: 0;
 }
 
 .sgdbDesktopToolbar .sgdbResultsState {
-  margin: -8px 32px 4px;
+  position: absolute;
+  top: var(--sgdb-tab-vertical-gap, 18px);
+  left: 32px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  height: 32px;
+  margin: 0;
+}
+
+.sgdbGrid.filtersOpen {
+  margin-top: 12px;
 }
 
 .sgdbGrid {
   display: grid;
-  padding: 10px 42px var(--gamepadui-current-footer-height, 34px);
+  padding: 10px 42px max(42px, var(--gamepadui-current-footer-height, 34px));
   row-gap: 1.22em;
   column-gap: 0.95em;
   width: 100%;
   justify-content: space-evenly;
   grid-auto-flow: dense;
   box-sizing: border-box;
+}
+
+.sgdbGrid.hasMore {
+  padding-bottom: 0;
 }
 
 .sgdbDesktopToolbar .sgdbGrid {
@@ -2040,7 +2272,7 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   margin-top: auto;
   overflow: hidden;
   container-type: size;
-  background: url('/images/defaultappimage.png') center center / cover, #05070a;
+  background: url('/images/defaultappimage.png') center center / cover, var(--sgdb-bg-deep);
   cursor: pointer;
   outline: 2px solid transparent;
   border-radius: 3px;
@@ -2048,12 +2280,21 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   transition: outline-color ease-in-out 160ms, transform ease-out 160ms, box-shadow ease-out 160ms;
 }
 
+.image-wrap.sgdbAsset.type-logo,
+.image-wrap.sgdbAsset.type-icon {
+  box-sizing: border-box;
+  background: var(--sgdb-surface-hover);
+  border: 1px solid var(--sgdb-border-soft);
+}
+
 .image-wrap.sgdbAsset.type-logo {
   padding-bottom: 0 !important;
-  height: 185px;
+  height: auto;
+  aspect-ratio: 650 / 248;
 }
 
 .image-wrap.sgdbAsset.type-icon {
+  padding-bottom: 0 !important;
   aspect-ratio: 1 / 1;
 }
 
@@ -2061,7 +2302,7 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 .image-wrap.sgdbAsset.gpfocus,
 .image-wrap.sgdbAsset:focus-visible {
   z-index: 4;
-  outline-color: rgba(226, 231, 237, 0.66);
+  outline-color: color-mix(in srgb, var(--sgdb-accent) 64%, var(--sgdb-text));
   transform: translate3d(0, -3px, 18px) scale(1.018);
   box-shadow: 0 18px 34px rgba(0, 0, 0, 0.44), 0 0 0 1px rgba(255, 255, 255, 0.16);
 }
@@ -2076,17 +2317,17 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   width: clamp(23px, 13cqw, 38px);
   height: clamp(23px, 13cqw, 38px);
   padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.58);
+  border: 1px solid var(--sgdb-border-soft);
   border-left-width: 0;
   border-bottom-width: 0;
-  border-radius: 0 clamp(3px, 2.4cqw, 5px) 0 0;
-  color: rgba(255, 255, 255, 0.94);
-  background: rgba(7, 10, 15, 0.86);
-  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.24);
+  border-radius: 0 clamp(3px, 2.4cqw, 4px) 0 0;
+  color: var(--sgdb-text-control);
+  background: color-mix(in srgb, var(--sgdb-surface-hover) 88%, transparent);
+  box-shadow: none;
   cursor: pointer;
   opacity: 0;
   transform: translateY(6px);
-  transition: opacity 120ms ease, transform 120ms ease, background 120ms ease;
+  transition: opacity 120ms ease, transform 120ms ease, background 120ms ease, color 120ms ease;
 }
 
 .image-wrap.sgdbAsset.type-grid_l .sgdbExternalLinkButton,
@@ -2106,7 +2347,8 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 
 .sgdbExternalLinkButton:hover,
 .sgdbExternalLinkButton:focus-visible {
-  background: rgba(12, 18, 26, 0.96);
+  color: var(--sgdb-text);
+  background: var(--sgdb-surface-hover);
   outline: 0;
 }
 
@@ -2172,7 +2414,7 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   gap: 10px;
   width: 100%;
   min-height: 96px;
-  color: #8f98a8;
+  color: var(--sgdb-text-muted);
 }
 
 .author {
@@ -2181,7 +2423,7 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   gap: 0.5em;
   width: 100%;
   padding-top: 0.15em;
-  color: #dfe3ea;
+  color: var(--sgdb-text);
   font-size: 0.65em;
   overflow: hidden;
   text-shadow: 0 1px 1px #000;
@@ -2247,7 +2489,7 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   place-items: center;
   opacity: 0;
   z-index: -3;
-  background: rgba(0, 0, 0, 0.42);
+  background: var(--sgdb-overlay);
   transition: opacity 100ms ease, z-index 0s 100ms;
 }
 
@@ -2262,7 +2504,7 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   width: clamp(34px, min(18cqw, 28cqh), 52px);
   height: clamp(34px, min(18cqw, 28cqh), 52px);
   border-radius: 999px;
-  background: rgba(6, 10, 16, 0.82);
+  background: rgba(var(--dark-14, 6, 10, 16), 0.82);
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
 }
 
@@ -2279,8 +2521,8 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   gap: 8px;
   min-height: 52px;
   padding: 8px 24px;
-  background: #0e141b;
-  border-bottom: 1px solid rgba(102, 192, 244, 0.08);
+  background: var(--sgdb-bg);
+  border-bottom: 1px solid var(--sgdb-border-soft);
   box-sizing: border-box;
 }
 
@@ -2288,7 +2530,7 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   width: 104px;
   height: 36px;
   min-width: 104px;
-  border: 0;
+  border: 1px solid transparent;
   appearance: none;
   -webkit-appearance: none;
   background-clip: padding-box;
@@ -2303,8 +2545,9 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 }
 
 .sgdbDesktop .sgdbDesktopTab.selected {
-  color: #07111d;
-  background: #f8f8f4;
+  color: var(--sgdb-text);
+  border-color: var(--sgdb-border-soft);
+  background: var(--sgdb-surface-hover);
 }
 
 .sgdbDesktop .sgdbDesktopTab:nth-child(2) {
@@ -2320,7 +2563,7 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   justify-content: center;
   min-height: 44px;
   padding: 4px 24px 4px;
-  background: #0e141b;
+  background: var(--sgdb-bg);
 }
 
 .sgdbDesktop .sgdb-asset-toolbar .filter-buttons {
@@ -2357,10 +2600,10 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   border: 0;
   background: linear-gradient(
     90deg,
-    #1a9fff 0%,
-    #1a9fff var(--sgdb-slider-progress),
-    rgba(255, 255, 255, 0.11) var(--sgdb-slider-progress),
-    rgba(255, 255, 255, 0.11) 100%
+    var(--sgdb-slider-thumb) 0%,
+    var(--sgdb-slider-thumb) var(--sgdb-slider-progress),
+    var(--sgdb-slider-track) var(--sgdb-slider-progress),
+    var(--sgdb-slider-track) 100%
   );
 }
 
@@ -2370,8 +2613,8 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   margin-top: -3px;
   border: 0;
   border-radius: 50%;
-  background: #8fcfff;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.28);
+  background: var(--sgdb-text-control);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
   appearance: none;
   -webkit-appearance: none;
 }
@@ -2452,9 +2695,9 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   height: 32px;
   min-width: 0;
   padding: 0 16px;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: 999px;
-  color: rgba(226, 231, 237, 0.82);
+  color: var(--sgdb-text-control);
   background: transparent;
   font-size: 12.75px;
   font-weight: 700;
@@ -2469,8 +2712,9 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 .sgdbDesktopToolbar .sgdbFilterMainButton:focus-visible,
 .sgdbDesktopToolbar .sgdbResetButton:hover,
 .sgdbDesktopToolbar .sgdbResetButton:focus-visible {
-  color: #f3f5f7;
-  background: #30363d !important;
+  color: var(--sgdb-text);
+  border: 1px solid var(--sgdb-border-soft);
+  background: var(--sgdb-surface-hover) !important;
   box-shadow: none !important;
 }
 
@@ -2491,7 +2735,8 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   height: 32px;
   min-width: 0;
   padding: 0 16px;
-  color: rgba(226, 231, 237, 0.82);
+  border: 1px solid transparent;
+  color: var(--sgdb-text-control);
   background: transparent;
   font-size: 12.75px;
   font-weight: 700;
@@ -2502,8 +2747,9 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 .sgdbDesktopToolbar .sgdbFilterToggle.selected,
 .sgdbDesktopToolbar .sgdbFilterToggle:hover,
 .sgdbDesktopToolbar .sgdbFilterToggle:focus-visible {
-  color: #f3f5f7;
-  background: #30363d !important;
+  color: var(--sgdb-text);
+  border: 1px solid var(--sgdb-border-soft);
+  background: var(--sgdb-surface-hover) !important;
   box-shadow: none !important;
 }
 
@@ -2527,10 +2773,10 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   transform: translateY(-50%);
   background: linear-gradient(
     90deg,
-    #1a9fff 0%,
-    #1a9fff var(--sgdb-slider-progress),
-    rgba(255, 255, 255, 0.13) var(--sgdb-slider-progress),
-    rgba(255, 255, 255, 0.13) 100%
+    var(--sgdb-slider-thumb) 0%,
+    var(--sgdb-slider-thumb) var(--sgdb-slider-progress),
+    var(--sgdb-slider-track) var(--sgdb-slider-progress),
+    var(--sgdb-slider-track) 100%
   );
 }
 
@@ -2561,8 +2807,8 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   margin-top: -4px;
   border: 0;
   border-radius: 50%;
-  background: #8fcfff;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.28);
+  background: var(--sgdb-text-control);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
   appearance: none;
   -webkit-appearance: none;
 }

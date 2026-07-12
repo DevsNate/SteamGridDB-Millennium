@@ -196,6 +196,56 @@ function set_steam_icon_from_url(appid, url, extension)
     return result
 end
 
+function reset_steam_icon(appid)
+    if type(appid) == "table" then
+        appid = appid.appid
+    end
+
+    local steam_path = millennium.steam_path()
+    local userdata_path = fs.join(steam_path, "userdata")
+    local cache_dir = steam_library_cache()
+    local app_cache_dir = fs.join(cache_dir, tostring(appid))
+    local base_name = tostring(appid) .. "_icon"
+
+    local script = table.concat({
+        "try {",
+        "$ErrorActionPreference = 'Stop'",
+        "$userdata = " .. ps_quote(userdata_path),
+        "$cacheDir = " .. ps_quote(cache_dir),
+        "$appCacheDir = " .. ps_quote(app_cache_dir),
+        "$baseName = " .. ps_quote(base_name),
+        "$removed = @()",
+        "if (Test-Path -LiteralPath $userdata) {",
+        "  $gridDirs = Get-ChildItem -LiteralPath $userdata -Directory | ForEach-Object { Join-Path $_.FullName 'config\\grid' }",
+        "  foreach ($gridDir in $gridDirs) {",
+        "    if (Test-Path -LiteralPath $gridDir) {",
+        "      Get-ChildItem -LiteralPath $gridDir -File -ErrorAction SilentlyContinue | Where-Object { $_.BaseName -eq $baseName } | ForEach-Object { $removed += $_.FullName; Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }",
+        "    }",
+        "  }",
+        "}",
+        "if (Test-Path -LiteralPath $cacheDir) {",
+        "  Get-ChildItem -LiteralPath $cacheDir -File -ErrorAction SilentlyContinue | Where-Object { $_.BaseName -eq $baseName } | ForEach-Object { $removed += $_.FullName; Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }",
+        "}",
+        "if (Test-Path -LiteralPath $appCacheDir) {",
+        "  Get-ChildItem -LiteralPath $appCacheDir -File -ErrorAction SilentlyContinue | Where-Object { $_.BaseName -match '^[a-fA-F0-9]{40}$' -and $_.Extension -match '^\\.(jpg|jpeg|png|ico)$' } | ForEach-Object { $removed += $_.FullName; Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }",
+        "}",
+        "Write-Output ($removed -join '|')",
+        "} catch { Write-Output ('ERROR: ' + $_.Exception.Message); exit 1 }"
+    }, "; ")
+
+    local result = run_powershell(script)
+    if result == nil then
+        logger:error("Icon reset failed")
+        return false
+    end
+    if string.sub(result, 1, 7) == "ERROR: " then
+        logger:error("Icon reset failed: " .. string.sub(result, 8))
+        return false
+    end
+
+    return result
+end
+
 function set_animated_artwork_from_url(appid, asset_type, url, extension)
     if type(appid) == "table" then
         local params = appid
