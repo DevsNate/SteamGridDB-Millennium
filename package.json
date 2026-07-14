@@ -1,7 +1,7 @@
 {
   "type": "module",
   "name": "steamgriddb-millennium",
-  "version": "1.5",
+  "version": "1.6",
   "description": "A Millennium plugin for browsing and applying SteamGridDB artwork.",
   "author": "SteamGridDB",
   "license": "GPL-3.0-or-later",

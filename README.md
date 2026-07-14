@@ -9,9 +9,10 @@ SteamGridDB for Millennium is a Steam artwork browser and manager built for the 
 - Apply artwork directly to Steam apps through Steam's frontend artwork APIs.
 - Download and apply Steam app icons through the Lua backend.
 - Reset custom artwork back to Steam defaults.
-- Big Picture/controller-friendly artwork browsing.
+- Big Picture/controller-friendly artwork browsing with automatic loading while scrolling.
 - Theme-aware interface designed to blend with Fluenty-style dark Steam themes.
-- Configurable theme colors for background, selected/hover surfaces, slider track, and slider thumb.
+- Built-in Fluenty Dark, Steam Blue, OLED Black, Midnight Violet, and Ember theme presets.
+- Configurable theme colors for background, selected/hover surfaces, grid hover borders, slider track, and slider thumb.
 - Desktop popout view with a compact floating tab bar.
 
 ## Installation

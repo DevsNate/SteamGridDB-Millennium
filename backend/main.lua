@@ -56,15 +56,6 @@ local function run_powershell(script)
     return utils.trim(output)
 end
 
-local function json_escape(value)
-    value = tostring(value or "")
-    value = string.gsub(value, "\\", "\\\\")
-    value = string.gsub(value, "\"", "\\\"")
-    value = string.gsub(value, "\r", "\\r")
-    value = string.gsub(value, "\n", "\\n")
-    return value
-end
-
 function sgdb_request(path)
     return request_json(path)
 end
@@ -158,6 +149,86 @@ function set_steam_icon_from_url(appid, url, extension)
         "$wc = [System.Net.WebClient]::new()",
         "$wc.Headers.Add('User-Agent', " .. ps_quote(USER_AGENT) .. ")",
         "$bytes = $wc.DownloadData(" .. ps_quote(url) .. ")",
+        "Add-Type -AssemblyName System.Drawing",
+        "function Get-ImageExtension($data) {",
+        "  if ($data.Length -ge 8 -and $data[0] -eq 0x89 -and $data[1] -eq 0x50 -and $data[2] -eq 0x4E -and $data[3] -eq 0x47 -and $data[4] -eq 0x0D -and $data[5] -eq 0x0A -and $data[6] -eq 0x1A -and $data[7] -eq 0x0A) { return 'png' }",
+        "  if ($data.Length -ge 3 -and $data[0] -eq 0xFF -and $data[1] -eq 0xD8 -and $data[2] -eq 0xFF) { return 'jpg' }",
+        "  if ($data.Length -ge 4 -and $data[0] -eq 0x00 -and $data[1] -eq 0x00 -and $data[2] -eq 0x01 -and $data[3] -eq 0x00) { return 'ico' }",
+        "  throw 'Downloaded icon is not PNG, JPEG, or ICO.'",
+        "}",
+        "function Get-ImageFromBytes($data) {",
+        "  $sourceExtension = Get-ImageExtension $data",
+        "  $stream = [System.IO.MemoryStream]::new($data, 0, $data.Length, $false, $true)",
+        "  if ($sourceExtension -eq 'ico') {",
+        "    $icon = [System.Drawing.Icon]::new($stream)",
+        "    $bitmap = $icon.ToBitmap()",
+        "    $icon.Dispose()",
+        "    $stream.Dispose()",
+        "    return $bitmap",
+        "  }",
+        "  $image = [System.Drawing.Image]::FromStream($stream, $true, $true)",
+        "  $bitmap = [System.Drawing.Bitmap]::new($image)",
+        "  $image.Dispose()",
+        "  $stream.Dispose()",
+        "  return $bitmap",
+        "}",
+        "function Convert-ToPngBytes($image) {",
+        "  $out = [System.IO.MemoryStream]::new()",
+        "  $image.Save($out, [System.Drawing.Imaging.ImageFormat]::Png)",
+        "  $result = $out.ToArray()",
+        "  $out.Dispose()",
+        "  return $result",
+        "}",
+        "function Convert-ToJpegBytes($image) {",
+        "  $bitmap = [System.Drawing.Bitmap]::new($image.Width, $image.Height, [System.Drawing.Imaging.PixelFormat]::Format24bppRgb)",
+        "  $graphics = [System.Drawing.Graphics]::FromImage($bitmap)",
+        "  $graphics.Clear([System.Drawing.Color]::FromArgb(16, 16, 16))",
+        "  $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic",
+        "  $graphics.DrawImage($image, 0, 0, $image.Width, $image.Height)",
+        "  $graphics.Dispose()",
+        "  $out = [System.IO.MemoryStream]::new()",
+        "  $bitmap.Save($out, [System.Drawing.Imaging.ImageFormat]::Jpeg)",
+        "  $bitmap.Dispose()",
+        "  $result = $out.ToArray()",
+        "  $out.Dispose()",
+        "  return $result",
+        "}",
+        "function Convert-ToIcoBytes($image) {",
+        "  $out = [System.IO.MemoryStream]::new()",
+        "  $writer = [System.IO.BinaryWriter]::new($out)",
+        "  $pngBytes = Convert-ToPngBytes $image",
+        "  $writer.Write([UInt16]0)",
+        "  $writer.Write([UInt16]1)",
+        "  $writer.Write([UInt16]1)",
+        "  $writer.Write([byte]0)",
+        "  $writer.Write([byte]0)",
+        "  $writer.Write([byte]0)",
+        "  $writer.Write([byte]0)",
+        "  $writer.Write([UInt16]1)",
+        "  $writer.Write([UInt16]32)",
+        "  $writer.Write([UInt32]$pngBytes.Length)",
+        "  $writer.Write([UInt32]22)",
+        "  $writer.Write($pngBytes)",
+        "  $writer.Flush()",
+        "  $result = $out.ToArray()",
+        "  $writer.Dispose()",
+        "  $out.Dispose()",
+        "  return $result",
+        "}",
+        "function Convert-IconBytesForPath($targetPath, $sourceBytes, $image) {",
+        "  $targetExtension = [System.IO.Path]::GetExtension($targetPath).TrimStart('.').ToLowerInvariant()",
+        "  if ($targetExtension -eq 'jpg' -or $targetExtension -eq 'jpeg') { return Convert-ToJpegBytes $image }",
+        "  if ($targetExtension -eq 'png') { return Convert-ToPngBytes $image }",
+        "  if ($targetExtension -eq 'ico') {",
+        "    if ((Get-ImageExtension $sourceBytes) -eq 'ico') { return $sourceBytes }",
+        "    return Convert-ToIcoBytes $image",
+        "  }",
+        "  return $sourceBytes",
+        "}",
+        "$downloadExtension = Get-ImageExtension $bytes",
+        "$fileName = $baseName + '.' + $downloadExtension",
+        "$cacheTarget = Join-Path $cacheDir $fileName",
+        "$sourceImage = Get-ImageFromBytes $bytes",
         "$gridDirs = Get-ChildItem -LiteralPath $userdata -Directory | ForEach-Object { Join-Path $_.FullName 'config\\grid' }",
         "$written = @()",
         "foreach ($gridDir in $gridDirs) {",
@@ -168,16 +239,18 @@ function set_steam_icon_from_url(appid, url, extension)
         "  $written += $target",
         "}",
         "if (Test-Path -LiteralPath $cacheDir) {",
-        "  [System.IO.File]::WriteAllBytes($cacheTarget, $bytes)",
+        "  Get-ChildItem -LiteralPath $cacheDir -File -ErrorAction SilentlyContinue | Where-Object { $_.BaseName -eq $baseName } | Remove-Item -Force -ErrorAction SilentlyContinue",
+        "  [System.IO.File]::WriteAllBytes($cacheTarget, (Convert-IconBytesForPath $cacheTarget $bytes $sourceImage))",
         "  $written += $cacheTarget",
         "}",
         "if (Test-Path -LiteralPath $appCacheDir) {",
         "  $rootIconTargets = Get-ChildItem -LiteralPath $appCacheDir -File -ErrorAction SilentlyContinue | Where-Object { $_.BaseName -match '^[a-fA-F0-9]{40}$' -and $_.Extension -match '^\\.(jpg|jpeg|png|ico)$' }",
         "  foreach ($targetFile in $rootIconTargets) {",
-        "    [System.IO.File]::WriteAllBytes($targetFile.FullName, $bytes)",
+        "    [System.IO.File]::WriteAllBytes($targetFile.FullName, (Convert-IconBytesForPath $targetFile.FullName $bytes $sourceImage))",
         "    $written += $targetFile.FullName",
         "  }",
         "}",
+        "$sourceImage.Dispose()",
         "if ($written.Count -eq 0) { throw 'No Steam grid folders were available.' }",
         "Write-Output ($written -join '|')",
         "} catch { Write-Output ('ERROR: ' + $_.Exception.Message); exit 1 }"
@@ -326,182 +399,6 @@ function set_animated_artwork_from_url(appid, asset_type, url, extension)
     end
 
     return result
-end
-
-function get_current_artwork(appid)
-    appid = tostring(appid or "")
-    if appid == "" then
-        return "{}"
-    end
-
-    local steam_path = millennium.steam_path()
-    local userdata_path = fs.join(steam_path, "userdata")
-    if not fs.exists(userdata_path) then
-        return "{}"
-    end
-
-    local function asset_key(stem)
-        if stem == appid .. "p" then
-            return "grid_p"
-        end
-        if stem == appid then
-            return "grid_l"
-        end
-        if stem == appid .. "_hero" then
-            return "hero"
-        end
-        if stem == appid .. "_logo" then
-            return "logo"
-        end
-        if stem == appid .. "_icon" then
-            return "icon"
-        end
-        return nil
-    end
-
-    local function mime_for(ext)
-        ext = string.lower(tostring(ext or ""))
-        if ext == ".jpg" or ext == ".jpeg" then
-            return "image/jpeg"
-        end
-        if ext == ".png" then
-            return "image/png"
-        end
-        if ext == ".webp" then
-            return "image/webp"
-        end
-        if ext == ".gif" then
-            return "image/gif"
-        end
-        if ext == ".ico" then
-            return "image/x-icon"
-        end
-        return "application/octet-stream"
-    end
-
-    local found = {}
-    local function remember_artwork(key, file_entry)
-        if not key or not file_entry or not file_entry.path then
-            return
-        end
-
-        local modified = fs.last_write_time(file_entry.path) or 0
-        if not found[key] or modified > found[key].modified_sort then
-            local length = fs.file_size(file_entry.path) or file_entry.size or 0
-            found[key] = {
-                path = file_entry.path,
-                modified = tostring(modified),
-                modified_sort = modified,
-                length = length,
-                extension = fs.extension(file_entry.path) or "",
-            }
-        end
-    end
-
-    local users = fs.list(userdata_path) or {}
-    for _, user_entry in ipairs(users) do
-        if user_entry.is_directory then
-            local grid_dir = fs.join(user_entry.path, "config", "grid")
-            if fs.exists(grid_dir) then
-                local files = fs.list(grid_dir) or {}
-                for _, file_entry in ipairs(files) do
-                    if file_entry.is_file then
-                        local stem = fs.stem(file_entry.path)
-                        local key = asset_key(stem)
-                        if key then
-                            remember_artwork(key, file_entry)
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    local cache_dir = steam_library_cache()
-    if fs.exists(cache_dir) then
-        local fallback_stems = {
-            [appid .. "_library_600x900"] = "grid_p",
-            [appid .. "_library_600x900_2x"] = "grid_p",
-            [appid .. "_portrait"] = "grid_p",
-            [appid .. "_header"] = "grid_l",
-            [appid .. "_library_header"] = "grid_l",
-            [appid .. "_library_hero"] = "hero",
-            [appid .. "_hero"] = "hero",
-            [appid .. "_logo"] = "logo",
-            [appid .. "_icon"] = "icon",
-        }
-
-        local app_cache_dir = fs.join(cache_dir, appid)
-        local function cache_asset_key(file_entry, in_app_cache_root)
-            local stem = fs.stem(file_entry.path)
-            local name = string.lower(tostring(file_entry.name or stem or ""))
-            local ext = string.lower(tostring(fs.extension(file_entry.path) or ""))
-
-            if name == "library_capsule.jpg" or name == "library_600x900.jpg" or name == "portrait.jpg" then
-                return "grid_p"
-            end
-            if name == "library_header.jpg" or name == "header.jpg" then
-                return "grid_l"
-            end
-            if name == "library_hero.jpg" or name == "hero.jpg" then
-                return "hero"
-            end
-            if name == "logo.png" or name == "logo.jpg" then
-                return "logo"
-            end
-            if in_app_cache_root and (ext == ".jpg" or ext == ".png" or ext == ".ico") then
-                return "icon"
-            end
-
-            return fallback_stems[stem]
-        end
-
-        local function scan_cache_directory(directory, in_app_cache_root)
-            local entries = fs.list(directory) or {}
-            for _, entry in ipairs(entries) do
-                if entry.is_file then
-                    local key = cache_asset_key(entry, in_app_cache_root)
-                    if key and not found[key] then
-                        remember_artwork(key, entry)
-                    end
-                elseif entry.is_directory then
-                    scan_cache_directory(entry.path, false)
-                end
-            end
-        end
-
-        if fs.exists(app_cache_dir) then
-            scan_cache_directory(app_cache_dir, true)
-        end
-
-        local cache_files = fs.list(cache_dir) or {}
-        for _, file_entry in ipairs(cache_files) do
-            if file_entry.is_file then
-                local stem = fs.stem(file_entry.path)
-                local key = fallback_stems[stem]
-                if key and not found[key] then
-                    remember_artwork(key, file_entry)
-                end
-            end
-        end
-    end
-
-    local order = { "grid_p", "grid_l", "hero", "logo", "icon" }
-    local parts = {}
-    for _, key in ipairs(order) do
-        local item = found[key]
-        if item then
-            local fields = {
-                '"path":"' .. json_escape(item.path) .. '"',
-                '"modified":"' .. json_escape(item.modified) .. '"',
-                '"length":' .. tostring(item.length or 0),
-            }
-
-            table.insert(parts, '"' .. key .. '":{' .. table.concat(fields, ",") .. "}")
-        end
-    end
-
-    return "{" .. table.concat(parts, ",") .. "}"
 end
 
 function open_external_url(url)

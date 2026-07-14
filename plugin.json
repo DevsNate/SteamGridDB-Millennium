@@ -3,7 +3,7 @@
   "name": "steamgriddb",
   "common_name": "SteamGridDB",
   "description": "Browse and apply SteamGridDB artwork from Millennium.",
-  "version": "1.5",
+  "version": "1.6",
   "backendType": "lua",
   "frontend": "frontend",
   "backend": "backend",

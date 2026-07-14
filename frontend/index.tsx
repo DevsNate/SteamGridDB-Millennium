@@ -62,18 +62,19 @@ export type FilterState = {
 };
 export type ZoomState = Record<SGDBAssetType, number>;
 type FilterStateByType = Record<SGDBAssetType, FilterState>;
-export type CurrentArtworkItem = {
-  path: string;
-  dataUrl?: string;
-  modified?: string;
-  length?: number;
-};
-export type CurrentArtworkState = Partial<Record<SGDBAssetType, CurrentArtworkItem>>;
 type ThemeColorSettings = {
   background: string;
   surfaceHover: string;
+  gridHoverBorder: string;
   sliderTrack: string;
   sliderThumb: string;
+};
+type ThemePresetKey = 'fluenty' | 'steam' | 'oled' | 'midnight' | 'ember' | 'custom';
+type ThemePreset = {
+  key: Exclude<ThemePresetKey, 'custom'>;
+  label: string;
+  colors: Partial<ThemeColorSettings>;
+  backgroundPaint?: string;
 };
 
 type PluginSettings = {
@@ -82,6 +83,7 @@ type PluginSettings = {
   showCreatorNames: boolean;
   preloadPages: number;
   spaceThemeCompatibility: boolean;
+  themePreset: ThemePresetKey;
   themeColors: ThemeColorSettings;
 };
 
@@ -101,7 +103,6 @@ const downloadAsBase64 = callable<[{ url: string }], string | false>('download_a
 const setSteamIconFromUrl = callable<[{ appid: number; url: string; extension: string }], string | false>('set_steam_icon_from_url');
 const resetSteamIcon = callable<[{ appid: number }], string | false>('reset_steam_icon');
 const setAnimatedArtworkFromUrl = callable<[{ appid: number; asset_type: SGDBAssetType; url: string; extension: string }], string | false>('set_animated_artwork_from_url');
-const getCurrentArtwork = callable<[{ appid: number }], string | false>('get_current_artwork');
 const openExternalUrl = callable<[{ url: string }], boolean>('open_external_url');
 
 const ASSET_TYPE: Record<SGDBAssetType, number> = {
@@ -205,9 +206,72 @@ const defaultFilters: FilterState = {
 const defaultThemeColors: ThemeColorSettings = {
   background: '#121212',
   surfaceHover: '#1e1e1e',
+  gridHoverBorder: '#ffffff',
   sliderTrack: '#252525',
   sliderThumb: '#3a3a3a',
 };
+
+const themePresets: ThemePreset[] = [
+  {
+    key: 'fluenty',
+    label: 'Fluenty dark',
+    colors: defaultThemeColors,
+  },
+  {
+    key: 'steam',
+    label: 'Steam blue',
+    colors: {
+      background: '#05080b',
+      surfaceHover: '#30363d',
+      gridHoverBorder: '#ffffff',
+      sliderTrack: '#252a2f',
+      sliderThumb: '#1a9fff',
+    },
+    backgroundPaint: 'radial-gradient(1180px 760px at 52% 16%, rgba(17, 29, 38, 0.36), rgba(7, 12, 17, 0.18) 54%, transparent 84%), linear-gradient(180deg, #05080b 0, #060a0e 96px, #070d12 210px, #091017 100%)',
+  },
+  {
+    key: 'oled',
+    label: 'OLED black',
+    colors: {
+      background: '#000000',
+      surfaceHover: '#101010',
+      gridHoverBorder: '#ffffff',
+      sliderTrack: '#202020',
+      sliderThumb: '#d8d8d8',
+    },
+  },
+  {
+    key: 'midnight',
+    label: 'Midnight violet',
+    colors: {
+      background: '#101018',
+      surfaceHover: '#252235',
+      gridHoverBorder: '#ffffff',
+      sliderTrack: '#302c46',
+      sliderThumb: '#8f87ff',
+    },
+  },
+  {
+    key: 'ember',
+    label: 'Ember',
+    colors: {
+      background: '#17120f',
+      surfaceHover: '#2a201a',
+      gridHoverBorder: '#ffffff',
+      sliderTrack: '#36281f',
+      sliderThumb: '#d58b55',
+    },
+  },
+];
+
+const defaultThemePreset: ThemePresetKey = 'fluenty';
+const themePresetKeys = new Set<ThemePresetKey>([...themePresets.map((preset) => preset.key), 'custom']);
+const themePresetColors = (key: ThemePresetKey, fallback: ThemeColorSettings = defaultThemeColors) => ({
+  ...fallback,
+  ...(themePresets.find((preset) => preset.key === key)?.colors ?? defaultThemeColors),
+});
+const themePresetBackgroundPaint = (key: ThemePresetKey, fallback: string) =>
+  themePresets.find((preset) => preset.key === key)?.backgroundPaint ?? fallback;
 
 const defaultSettings: PluginSettings = {
   filterDefaults: defaultFilters,
@@ -215,6 +279,7 @@ const defaultSettings: PluginSettings = {
   showCreatorNames: true,
   preloadPages: 0,
   spaceThemeCompatibility: false,
+  themePreset: defaultThemePreset,
   themeColors: defaultThemeColors,
 };
 
@@ -289,10 +354,26 @@ const normalizeThemeColors = (colors: unknown): ThemeColorSettings => {
   return {
     background: normalizeHexColor(saved.background, defaultThemeColors.background),
     surfaceHover: normalizeHexColor(saved.surfaceHover, defaultThemeColors.surfaceHover),
+    gridHoverBorder: normalizeHexColor(saved.gridHoverBorder, defaultThemeColors.gridHoverBorder),
     sliderTrack: normalizeHexColor(saved.sliderTrack, defaultThemeColors.sliderTrack),
     sliderThumb: normalizeHexColor(saved.sliderThumb, defaultThemeColors.sliderThumb),
   };
 };
+
+const normalizeThemePreset = (preset: unknown): ThemePresetKey => {
+  const value = String(preset ?? '');
+  return themePresetKeys.has(value as ThemePresetKey) ? value as ThemePresetKey : defaultThemePreset;
+};
+
+const sameThemeColors = (left: ThemeColorSettings, right: ThemeColorSettings) =>
+  left.background === right.background
+  && left.surfaceHover === right.surfaceHover
+  && left.gridHoverBorder === right.gridHoverBorder
+  && left.sliderTrack === right.sliderTrack
+  && left.sliderThumb === right.sliderThumb;
+
+const themePresetFromColors = (colors: ThemeColorSettings) =>
+  themePresets.find((preset) => sameThemeColors(themePresetColors(preset.key, colors), colors))?.key ?? 'custom';
 
 const filterStateByType = (fallback: FilterState): FilterStateByType => ({
   grid_p: { ...fallback },
@@ -321,14 +402,18 @@ const loadFiltersByType = (fallback: FilterState): FilterStateByType => {
   }
 };
 
-const normalizeSettings = (settings: Partial<PluginSettings>): PluginSettings => ({
-  filterDefaults: isFilterState(settings.filterDefaults) ? { ...defaultFilters, ...settings.filterDefaults } : defaultSettings.filterDefaults,
-  showExternalLinks: typeof settings.showExternalLinks === 'boolean' ? settings.showExternalLinks : defaultSettings.showExternalLinks,
-  showCreatorNames: typeof settings.showCreatorNames === 'boolean' ? settings.showCreatorNames : defaultSettings.showCreatorNames,
-  preloadPages: Math.max(0, Math.min(5, Number.isFinite(settings.preloadPages) ? Math.trunc(settings.preloadPages as number) : defaultSettings.preloadPages)),
-  spaceThemeCompatibility: typeof settings.spaceThemeCompatibility === 'boolean' ? settings.spaceThemeCompatibility : defaultSettings.spaceThemeCompatibility,
-  themeColors: normalizeThemeColors(settings.themeColors),
-});
+const normalizeSettings = (settings: Partial<PluginSettings>): PluginSettings => {
+  const themeColors = normalizeThemeColors(settings.themeColors);
+  return {
+    filterDefaults: isFilterState(settings.filterDefaults) ? { ...defaultFilters, ...settings.filterDefaults } : defaultSettings.filterDefaults,
+    showExternalLinks: typeof settings.showExternalLinks === 'boolean' ? settings.showExternalLinks : defaultSettings.showExternalLinks,
+    showCreatorNames: typeof settings.showCreatorNames === 'boolean' ? settings.showCreatorNames : defaultSettings.showCreatorNames,
+    preloadPages: Math.max(0, Math.min(5, Number.isFinite(settings.preloadPages) ? Math.trunc(settings.preloadPages as number) : defaultSettings.preloadPages)),
+    spaceThemeCompatibility: typeof settings.spaceThemeCompatibility === 'boolean' ? settings.spaceThemeCompatibility : defaultSettings.spaceThemeCompatibility,
+    themePreset: settings.themePreset === undefined ? themePresetFromColors(themeColors) : normalizeThemePreset(settings.themePreset),
+    themeColors,
+  };
+};
 
 const loadPluginSettings = (): PluginSettings => {
   try {
@@ -521,6 +606,7 @@ export const assetGridStyle = (assetType: SGDBAssetType, zoom: number) => {
 const themeColorRows: { key: keyof ThemeColorSettings; label: string }[] = [
   { key: 'background', label: 'Background' },
   { key: 'surfaceHover', label: 'Selected and hover surface' },
+  { key: 'gridHoverBorder', label: 'Grid hover border' },
   { key: 'sliderTrack', label: 'Slider track' },
   { key: 'sliderThumb', label: 'Slider thumb' },
 ];
@@ -551,6 +637,7 @@ const SettingsView = ({
   const updateThemeColor = (key: keyof ThemeColorSettings, value: string) => {
     setSettings((current) => ({
       ...current,
+      themePreset: 'custom',
       themeColors: {
         ...current.themeColors,
         [key]: normalizeHexColor(value, current.themeColors[key]),
@@ -558,10 +645,19 @@ const SettingsView = ({
     }));
   };
 
+  const updateThemePreset = (themePreset: ThemePresetKey) => {
+    setSettings((current) => ({
+      ...current,
+      themePreset,
+      themeColors: themePreset === 'custom' ? current.themeColors : themePresetColors(themePreset, current.themeColors),
+    }));
+  };
+
   const resetThemeColors = () => {
     setSettings((current) => ({
       ...current,
-      themeColors: defaultThemeColors,
+      themePreset: defaultThemePreset,
+      themeColors: themePresetColors(defaultThemePreset),
     }));
   };
 
@@ -647,6 +743,19 @@ const SettingsView = ({
             Reset
           </button>
         </div>
+        <label className="sgdbSettingsRow sgdbSettingsPresetRow">
+          <span>Theme preset</span>
+          <select
+            className="sgdbThemePresetSelect"
+            value={settings.themePreset}
+            onChange={(event) => updateThemePreset(event.currentTarget.value as ThemePresetKey)}
+          >
+            {themePresets.map((preset) => (
+              <option key={preset.key} value={preset.key}>{preset.label}</option>
+            ))}
+            <option value="custom">Custom</option>
+          </select>
+        </label>
         {themeColorRows.map(({ key, label }) => (
           <label className="sgdbSettingsRow sgdbSettingsColorRow" key={key}>
             <span>{label}</span>
@@ -691,7 +800,6 @@ const SteamGridDBContent = ({
   const [applyingId, setApplyingId] = useState<number | null>(null);
   const [uiMode, setUiMode] = useState<EUIMode>(EUIMode.Desktop);
   const [sgdbGameId, setSgdbGameId] = useState<number | null>(null);
-  const [currentArtwork, setCurrentArtwork] = useState<CurrentArtworkState>({});
   const appId = useMemo(() => Number.parseInt(appIdText, 10), [appIdText]);
   const hasAppId = Number.isFinite(appId) && appId > 0;
   const isGamepadUI = uiMode === EUIMode.GamePad;
@@ -700,7 +808,9 @@ const SteamGridDBContent = ({
   const filters = filtersByType[assetType] ?? settings.filterDefaults;
   const rootStyle = {
     '--sgdb-bg': settings.themeColors.background,
+    '--sgdb-bg-paint': themePresetBackgroundPaint(settings.themePreset, settings.themeColors.background),
     '--sgdb-surface-hover': settings.themeColors.surfaceHover,
+    '--sgdb-grid-hover-border': settings.themeColors.gridHoverBorder,
     '--sgdb-slider-track': settings.themeColors.sliderTrack,
     '--sgdb-slider-thumb': settings.themeColors.sliderThumb,
   } as CSSProperties;
@@ -745,25 +855,6 @@ const SteamGridDBContent = ({
     });
   }, [assetType, settings.filterDefaults]);
 
-  const refreshCurrentArtwork = useCallback(async () => {
-    if (!Number.isFinite(appId)) {
-      setCurrentArtwork({});
-      return;
-    }
-
-    const raw = await getCurrentArtwork({ appid: appId }).catch(() => false);
-    if (typeof raw !== 'string' || raw.length === 0) {
-      setCurrentArtwork({});
-      return;
-    }
-
-    try {
-      setCurrentArtwork(JSON.parse(raw) as CurrentArtworkState);
-    } catch {
-      setCurrentArtwork({});
-    }
-  }, [appId]);
-
   useEffect(() => {
     const nextAppId = normalizeAppIdText(initialAppId) ?? (allowAppIdFallback ? fallbackAppIdText() : null);
     if (nextAppId) {
@@ -780,10 +871,6 @@ const SteamGridDBContent = ({
       setAssetType(initialAssetType);
     }
   }, [initialAssetType]);
-
-  useEffect(() => {
-    void refreshCurrentArtwork();
-  }, [refreshCurrentArtwork]);
 
   useEffect(() => {
     let mounted = true;
@@ -900,7 +987,6 @@ const SteamGridDBContent = ({
           throw new Error('The icon could not be written to Steam grid cache.');
         }
         notice('Icon Saved', 'Restart Steam if the icon does not refresh immediately.');
-        void refreshCurrentArtwork();
         return;
       }
 
@@ -920,7 +1006,6 @@ const SteamGridDBContent = ({
           setDefaultLogoPosition(appId);
         }
         notice('Animated Artwork Saved', `${ASSET_LABEL[type]} was saved directly. Restart Steam if it does not refresh immediately.`);
-        void refreshCurrentArtwork();
         return;
       }
 
@@ -938,13 +1023,12 @@ const SteamGridDBContent = ({
         setDefaultLogoPosition(appId);
       }
       notice('Artwork Applied', `${ASSET_LABEL[type]} was applied to ${appId}.`);
-      void refreshCurrentArtwork();
     } catch (err) {
       notice('Apply Failed', err instanceof Error ? err.message : String(err));
     } finally {
       setApplyingId(null);
     }
-  }, [appId, refreshCurrentArtwork]);
+  }, [appId]);
 
   const resetArtwork = useCallback(async (type: SGDBAssetType) => {
     if (!Number.isFinite(appId)) {
@@ -959,17 +1043,15 @@ const SteamGridDBContent = ({
           throw new Error('Icon cache reset failed.');
         }
         notice('Icon Reset', 'Restart Steam if the icon does not refresh.');
-        void refreshCurrentArtwork();
         return;
       }
 
       await SteamClient.Apps.ClearCustomArtworkForApp(appId, ASSET_TYPE[type]);
       notice('Artwork Reset', `${ASSET_LABEL[type]} was reset to default.`);
-      void refreshCurrentArtwork();
     } catch (err) {
       notice('Reset Failed', err instanceof Error ? err.message : String(err));
     }
-  }, [appId, refreshCurrentArtwork]);
+  }, [appId]);
 
   const openAssetPage = useCallback(async (asset: SGDBAsset, type: SGDBAssetType) => {
     const url = `https://www.steamgriddb.com/${ASSET_PAGE_PATH[type]}/${asset.id}`;
@@ -1201,6 +1283,7 @@ const styles = `
   margin-top: var(--basicui-header-height, 40px);
   padding: 0;
   --sgdb-bg: #121212;
+  --sgdb-bg-paint: var(--sgdb-bg);
   --sgdb-bg-deep: rgb(var(--dark-14, 5, 8, 11));
   --sgdb-bg-mid: rgb(var(--dark-19, 7, 13, 18));
   --sgdb-surface: rgb(var(--dark-20, 16, 24, 32));
@@ -1215,13 +1298,15 @@ const styles = `
   --sgdb-text-control: #b8b8b8;
   --sgdb-border: #333333;
   --sgdb-border-soft: #2c2c2c;
+  --sgdb-grid-hover-border: #ffffff;
+  --sgdb-grid-hover-border-visible: color-mix(in srgb, var(--sgdb-grid-hover-border) 58%, transparent);
   --sgdb-slider-track: #252525;
   --sgdb-slider-thumb: #3a3a3a;
   --sgdb-accent: var(--accent-col, #1a9fff);
   --sgdb-accent-soft: var(--accent-secondary, #8fcfff);
   --sgdb-accent-text: #07111d;
   --sgdb-noise: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAACXBIWXMAAAABAAAAAQBPJcTWAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAU6SURBVHicTZeJUsIwEIaTEhC8EfX9X8NHEm+sCIKN8639Os1Mp5Ds8e+ZbX54eCjT6TSxaq1psVikx8fHdHJykm5ubupms8mz2Szt9/uUcw4aVtd18f/8/Dz9/Pyk4/GYrq6u0m63S03TpO/v76DljczD4RD0p6enIauUkiaTSSowIuDs7CwYf39/02q1Csa2bTNMCJ3P5wmgCFosFnW73WYEf3x8pIuLi5CBYGUBEODws1CIDPgxjjfyCij4gWIYUcwej8JkxCJo9/t95hxaQLNQBg1ytJA9eL++vgbj4Mdo+AFZQI+FKNNN2+02XAUzRCh2HwH8R4CC4BMQSqETCGGBHhpAQcMZstFZIAId7uQAhbpaL/BwhkKE8KAEwQpHoDnC+eXlZfBhvVazz9uQlVJqERkWbzabEECMPj8/QyggEAwN4YCeB+DX19cBGHCG0pjjVX5zZsIBGg+5V0rJhQ1QmdUmCYD6hAtgegZGhJP9JhdnyGCNKwrPcs5Cth7Sa23bpmKGq4Cnd08Q4kIAiRo6wPHWE8vlMspVT6CIfZ77+/uwHEOIv9URCVjKfw4QL+ucAxiIky7FAxCb3QDGA+v1OsBMJpPMHha/v78HCM7hDyv72GOQucJZgMA6vKDFMENk6bFADzF70PAbHoSgFI8BGqXL5TK8Ba+h4T90lrLlHB6AyXp+enoKbyAE18PMf6vDOFsdeoXkxBOAwiCFmzvIIKl5y89CB42oTqfT6HgIsgT1iI2JPRMWpYbHRkRJ0R0Rihy8xgIYyqG1WxJe5EWSrtfrDJFlhgIOrAiYTCysMXlcdriu6yIPKE2bGt5FHm/vCGRZogHAy8QyESmHVoUxHFk7XEgkGedYrNsxxJoHlMo1Eh68G0mNAvOADWMEo8K9oLz1ZrNZpYm8vr4OzQkas3zcCVFuKRMKHs7RG7Qo87Jgw0QbZznMWIR3+gSMmsdClGKA4eHBC4YNEHrNHBrnV0GwFwvxe3t7Gy4lrfFeMObQco7bbTqAVY7XsHmEHJuUb++eAkKSkGW22tdRhicG4v4isqbt8bZdlI/B8sZ7litNiv/QPz8/RzUUFDJUoAQwxlG3OTjwGCostOdbKezZ1lEGYPKAcNhtb29vI5TmRCQhihGKFwSAMNsnhCwbj93QxmKiYUg/lNT5fB79wOoiUZETMS9lCF9UhvVoHEEOSi8oCG2fAHLY0FKE4konHJoaiu2gKDYkKoeedyRk27a11ppJwPHoRAmaWDBaZgAilvy/u7sLekCNyxfhdlCver3Zl2ylkgKUTLrY3o11Dh+4G/eCHOX8tnfwBozJ6/Cix3C/Uxerb0JD9y1mMcJA6AiuMM4gRrFXrvMfwl9eXgYvqUTXe5t6s5IrzAfIdw4tXhqr1aoej8esAgX5G+tBb8vFK+aKVnvdAs7Zj7B6kVnG3hVxazL7990sg5r2CmNfGRErEPORwoVjZjsV2WwcwzhHjrG3n3iJmbj9IJMKtYk11q7tsm8o2WQEqAmKAPg48x7gjVAe9m1g9BiAES55LfWYlkwwr2HnP2d+u6BDia6jk9lBDRU8TlN+qPjdIXhv2WHM77rOkqlN08Rg4uBoPthyVWLMrW2HmPHU5Og2Hlo01FzCKzGWN01TD4dD1KW17vTiBGuZ4jFGNpsSFmqAk5VlqPekdYqCf5DZ/A+V2bjDyOeUngGAHxN+AVs5gDG+u90ukhkemppXOrT0CpLbr2T1RCs2KZxuIbJ0sE7Fjmb8tquZI+O+YVXg5v688jHrWMaCnjwhh/4Alxekc0HT9AYAAAAASUVORK5CYII=');
-  background: var(--sgdb-bg);
+  background: var(--sgdb-bg-paint);
   overflow-x: hidden;
   box-sizing: border-box;
   overscroll-behavior: contain;
@@ -1265,12 +1350,13 @@ body:has(#sgdb-wrap.sgdbDesktopToolbar.sgdbPopoutContent) [class*="ModalPosition
 
 .sgdbDesktop {
   margin-top: 0;
+  background: var(--sgdb-bg-paint);
 }
 
 .sgdbDesktopToolbar {
   position: relative;
   box-shadow: 0 calc(-1 * var(--basicui-header-height, 40px)) 0 var(--sgdb-bg);
-  background: var(--sgdb-bg);
+  background: var(--sgdb-bg-paint);
 }
 
 .sgdbPopoutContent {
@@ -1281,11 +1367,15 @@ body:has(#sgdb-wrap.sgdbDesktopToolbar.sgdbPopoutContent) [class*="ModalPosition
   padding: 0;
   overflow: hidden;
   box-shadow: inset 0 0 0 1px var(--sgdb-border);
-  background: var(--sgdb-bg);
+  background: var(--sgdb-bg-paint);
 }
 
 .sgdbDesktopToolbar.sgdbPopoutContent {
   background: transparent;
+}
+
+.sgdbDesktopToolbar.sgdbPopoutContent .tabcontents-wrap {
+  background: var(--sgdb-bg-paint);
 }
 
 .sgdbPopoutContent .tabcontents-wrap {
@@ -1306,10 +1396,27 @@ body:has(#sgdb-wrap.sgdbDesktopToolbar.sgdbPopoutContent) [class*="ModalPosition
   width: 10px;
 }
 
+.sgdbPopoutContent .tabcontents-wrap::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.sgdbDesktopToolbar.sgdbPopoutContent .tabcontents-wrap::-webkit-scrollbar-button:vertical:start:decrement {
+  display: block;
+  width: 10px;
+  height: 64px;
+  background: transparent;
+}
+
 .sgdbPopoutContent .tabcontents-wrap::-webkit-scrollbar-track {
   margin-top: 8px;
   margin-bottom: 8px;
   background: transparent;
+}
+
+.sgdbDesktopToolbar.sgdbPopoutContent .tabcontents-wrap::-webkit-scrollbar-track {
+  margin-top: 8px;
 }
 
 .sgdbPopoutContent .tabcontents-wrap::-webkit-scrollbar-thumb {
@@ -1685,6 +1792,18 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   color: var(--sgdb-text-strong);
   background: var(--sgdb-border-soft);
   font-size: 15px;
+  font-weight: 700;
+}
+
+.sgdbThemePresetSelect {
+  min-width: 184px;
+  height: 34px;
+  padding: 0 34px 0 12px;
+  border: 1px solid var(--sgdb-border);
+  border-radius: 5px;
+  color: var(--sgdb-text-strong);
+  background: var(--sgdb-border-soft);
+  font-size: 14px;
   font-weight: 700;
 }
 
@@ -2184,10 +2303,10 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 }
 
 .sgdbBigPicture .sgdbResultsState {
-  position: absolute;
-  top: var(--sgdb-tab-vertical-gap, 18px);
-  left: 30px;
-  z-index: 2;
+  position: fixed;
+  top: calc(var(--basicui-header-height, 40px) + 18px);
+  left: 52px;
+  z-index: 20;
   display: flex;
   align-items: center;
   height: 32px;
@@ -2302,7 +2421,7 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 .image-wrap.sgdbAsset.gpfocus,
 .image-wrap.sgdbAsset:focus-visible {
   z-index: 4;
-  outline-color: color-mix(in srgb, var(--sgdb-accent) 64%, var(--sgdb-text));
+  outline-color: var(--sgdb-grid-hover-border-visible);
   transform: translate3d(0, -3px, 18px) scale(1.018);
   box-shadow: 0 18px 34px rgba(0, 0, 0, 0.44), 0 0 0 1px rgba(255, 255, 255, 0.16);
 }
