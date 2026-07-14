@@ -3,10 +3,52 @@ local logger = require("logger")
 local millennium = require("millennium")
 local utils = require("utils")
 local fs = require("fs")
+local json = require("json")
 
 local SGDB_API_BASE = "https://www.steamgriddb.com/api/v2"
-local SGDB_API_KEY = "e6e64699762c2129f481a910336af00a"
 local USER_AGENT = "steamgriddb-millennium/0.1.0"
+
+local function resolve_plugin_dir()
+    local source = debug.getinfo(1, "S").source or ""
+    if string.sub(source, 1, 1) == "@" then
+        source = string.sub(source, 2)
+    end
+    return string.match(source, "^(.+)[/\\]backend[/\\][^/\\]+$")
+        or fs.join(millennium.steam_path(), "millennium", "plugins", "SteamGridDB")
+end
+
+local SETTINGS_FILE = fs.join(resolve_plugin_dir(), "settings.json")
+local settings = { api_key = "" }
+
+local function trim(value)
+    return string.match(tostring(value or ""), "^%s*(.-)%s*$") or ""
+end
+
+local function load_settings()
+    local body = utils.read_file(SETTINGS_FILE)
+    if not body or body == "" then
+        settings = { api_key = "" }
+        return
+    end
+
+    local ok, decoded = pcall(json.decode, body)
+    if not ok or type(decoded) ~= "table" then
+        logger:warn("Could not decode SteamGridDB settings.json")
+        settings = { api_key = "" }
+        return
+    end
+
+    settings = decoded
+    settings.api_key = trim(settings.api_key)
+end
+
+local function save_settings()
+    local ok, err = utils.write_file(SETTINGS_FILE, json.encode(settings))
+    if not ok then
+        logger:error("Could not save SteamGridDB settings: " .. tostring(err))
+    end
+    return ok
+end
 
 local function join_url(path)
     if string.sub(path, 1, 1) == "/" then
@@ -16,10 +58,18 @@ local function join_url(path)
 end
 
 local function request_json(path)
+    local api_key = trim(settings.api_key)
+    if api_key == "" then
+        return json.encode({
+            success = false,
+            errors = { "SteamGridDB API key is required. Add one in the plugin settings." },
+        })
+    end
+
     local res, err = http.get(join_url(path), {
         headers = {
             ["Accept"] = "application/json",
-            ["Authorization"] = "Bearer " .. SGDB_API_KEY,
+            ["Authorization"] = "Bearer " .. api_key,
         },
         timeout = 30,
         user_agent = USER_AGENT,
@@ -58,6 +108,94 @@ end
 
 function sgdb_request(path)
     return request_json(path)
+end
+
+function add_asset_to_collection(collection_id, route)
+    local allowed_asset_types = {
+        grid = true,
+        hero = true,
+        logo = true,
+        icon = true,
+    }
+    local asset_type, encoded_id = string.match(tostring(route or ""), "^([a-z]+):(%d+)$")
+    if asset_type then
+        route = encoded_id
+    else
+        asset_type = "grid"
+    end
+    collection_id = tonumber(collection_id)
+    local asset_id = tonumber(route)
+    if not collection_id or collection_id <= 0 or collection_id ~= math.floor(collection_id) then
+        return json.encode({ success = false, errors = { "Invalid SteamGridDB collection ID." } })
+    end
+    if not asset_id or asset_id <= 0 or asset_id ~= math.floor(asset_id) then
+        return json.encode({ success = false, errors = { "Invalid SteamGridDB asset ID." } })
+    end
+    if not allowed_asset_types[asset_type] then
+        return json.encode({ success = false, errors = { "Unsupported SteamGridDB collection asset type." } })
+    end
+
+    local api_key = trim(settings.api_key)
+    if api_key == "" then
+        return json.encode({
+            success = false,
+            errors = { "SteamGridDB API key is required. Add one in the plugin settings." },
+        })
+    end
+
+    local path = "/collections/" .. tostring(collection_id) .. "/" .. asset_type .. "/" .. tostring(asset_id)
+    local res, err = http.request(join_url(path), {
+        method = "POST",
+        headers = {
+            ["Accept"] = "application/json",
+            ["Authorization"] = "Bearer " .. api_key,
+        },
+        timeout = 30,
+        user_agent = USER_AGENT,
+    })
+
+    if not res then
+        logger:error("SteamGridDB collection request failed: " .. tostring(err))
+        return json.encode({ success = false, errors = { "SteamGridDB collection request failed: " .. tostring(err) } })
+    end
+    if not res.body or res.body == "" then
+        return json.encode({
+            success = false,
+            errors = { "SteamGridDB returned an empty collection response (HTTP " .. tostring(res.status) .. ")." },
+        })
+    end
+
+    return res.body
+end
+
+function get_api_key_status()
+    local api_key = trim(settings.api_key)
+    return json.encode({
+        success = true,
+        configured = api_key ~= "",
+        api_key = api_key,
+    })
+end
+
+function set_api_key(api_key)
+    api_key = trim(api_key)
+    if api_key == "" then
+        return json.encode({ success = false, error = "API key cannot be empty." })
+    end
+    if string.len(api_key) > 256 then
+        return json.encode({ success = false, error = "API key is too long." })
+    end
+
+    settings.api_key = api_key
+    if not save_settings() then
+        return json.encode({ success = false, error = "Could not save the API key." })
+    end
+
+    return json.encode({
+        success = true,
+        configured = true,
+        api_key = api_key,
+    })
 end
 
 function download_as_base64(url)
@@ -413,6 +551,7 @@ function open_external_url(url)
 end
 
 local function on_load()
+    load_settings()
     logger:info("SteamGridDB Millennium backend loaded")
     millennium.ready()
 end

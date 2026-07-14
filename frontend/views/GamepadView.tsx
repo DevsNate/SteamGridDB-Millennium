@@ -19,6 +19,7 @@ type ViewProps = {
   applyingId: number | null;
   applyAsset: (asset: SGDBAsset, type: SGDBAssetType) => Promise<void>;
   openAssetPage: (asset: SGDBAsset, type: SGDBAssetType) => Promise<void>;
+  openCollectionPicker: (asset: SGDBAsset, type: SGDBAssetType, anchor: EventTarget) => void;
   showExternalLinks: boolean;
   showCreatorNames: boolean;
   loadAssets: (type: SGDBAssetType, nextPage?: number, append?: boolean) => Promise<void>;
@@ -92,6 +93,12 @@ const ExternalLinkIcon = () => (
   </svg>
 );
 
+const AddToCollectionIcon = () => (
+  <svg className="sgdbCollectionAddIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M12 5v14M5 12h14" />
+  </svg>
+);
+
 export const GamepadView = ({
   assetType,
   setAssetType,
@@ -109,6 +116,7 @@ export const GamepadView = ({
   applyingId,
   applyAsset,
   openAssetPage,
+  openCollectionPicker,
   showExternalLinks,
   showCreatorNames,
   loadAssets,
@@ -479,6 +487,19 @@ export const GamepadView = ({
                 role="button"
               >
                 <AssetPreview asset={asset} assetType={assetType} />
+                <button
+                  className="sgdbCollectionAddButton"
+                  type="button"
+                  aria-label="Add to collection"
+                  title="Add to collection"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openCollectionPicker(asset, assetType, event.currentTarget);
+                  }}
+                >
+                  <AddToCollectionIcon />
+                </button>
                 {showExternalLinks ? (
                   <button
                     className="sgdbExternalLinkButton"

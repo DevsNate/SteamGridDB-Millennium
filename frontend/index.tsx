@@ -9,10 +9,12 @@ import {
   findModuleByExport,
   EUIMode,
   IconsModule,
+  Menu,
   MenuItem,
   Millennium,
   Navigation,
   routerHook,
+  showContextMenu,
   showModal,
   toaster,
   useParams,
@@ -98,7 +100,22 @@ type SGDBGame = {
   name: string;
 };
 
+export type SGDBCollection = {
+  id: number;
+  name: string;
+};
+
+type ApiKeyResult = {
+  success: boolean;
+  configured?: boolean;
+  api_key?: string;
+  error?: string;
+};
+
 const sgdbRequest = callable<[{ path: string }], string | false>('sgdb_request');
+const addAssetToCollectionRequest = callable<[{ collection_id: number; route: string }], string | false>('add_asset_to_collection');
+const getApiKeyStatus = callable<[], string>('get_api_key_status');
+const setApiKey = callable<[{ api_key: string }], string>('set_api_key');
 const downloadAsBase64 = callable<[{ url: string }], string | false>('download_as_base64');
 const setSteamIconFromUrl = callable<[{ appid: number; url: string; extension: string }], string | false>('set_steam_icon_from_url');
 const resetSteamIcon = callable<[{ appid: number }], string | false>('reset_steam_icon');
@@ -209,6 +226,14 @@ const defaultThemeColors: ThemeColorSettings = {
   gridHoverBorder: '#ffffff',
   sliderTrack: '#252525',
   sliderThumb: '#3a3a3a',
+};
+
+const COLLECTION_ASSET_TYPE: Record<SGDBAssetType, 'grid' | 'hero' | 'logo' | 'icon'> = {
+  grid_p: 'grid',
+  grid_l: 'grid',
+  hero: 'hero',
+  logo: 'logo',
+  icon: 'icon',
 };
 
 const themePresets: ThemePreset[] = [
@@ -484,6 +509,31 @@ function parseResponse<T>(body: string | false): T {
   return parsed.data;
 }
 
+export async function loadCollections(): Promise<SGDBCollection[]> {
+  const data = parseResponse<unknown>(await sgdbRequest({ path: '/search/collections' }));
+  if (!Array.isArray(data)) {
+    throw new Error('SteamGridDB returned an invalid collections response.');
+  }
+
+  return data.map((value) => {
+    const collection = value as Partial<SGDBCollection>;
+    if (!Number.isFinite(collection.id) || typeof collection.name !== 'string') {
+      throw new Error('SteamGridDB returned an invalid collection.');
+    }
+    return {
+      id: collection.id as number,
+      name: collection.name,
+    };
+  });
+}
+
+async function addAssetToCollection(collectionId: number, asset: SGDBAsset, type: SGDBAssetType): Promise<void> {
+  parseResponse<null>(await addAssetToCollectionRequest({
+    collection_id: collectionId,
+    route: `${COLLECTION_ASSET_TYPE[type]}:${asset.id}`,
+  }));
+}
+
 function buildAssetQuery(assetType: SGDBAssetType, page: number, filters: FilterState) {
   const params = new URLSearchParams({
     page: String(page),
@@ -618,6 +668,50 @@ const SettingsView = ({
   settings: PluginSettings;
   setSettings: Dispatch<SetStateAction<PluginSettings>>;
 }) => {
+  const [apiKey, setApiKeyInput] = useState('');
+  const [apiKeyConfigured, setApiKeyConfigured] = useState(false);
+  const [apiKeySaving, setApiKeySaving] = useState(false);
+  const [apiKeyMessage, setApiKeyMessage] = useState('Checking API key…');
+
+  useEffect(() => {
+    let cancelled = false;
+    void getApiKeyStatus()
+      .then((body) => JSON.parse(body) as ApiKeyResult)
+      .then((result) => {
+        if (cancelled) return;
+        setApiKeyConfigured(Boolean(result.success && result.configured));
+        setApiKeyInput(result.api_key ?? '');
+        setApiKeyMessage(result.configured
+          ? 'API key saved.'
+          : 'An API key is required to use SteamGridDB.');
+      })
+      .catch(() => {
+        if (!cancelled) setApiKeyMessage('Could not read the saved API key.');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const saveApiKey = async () => {
+    const value = apiKey.trim();
+    if (!value || apiKeySaving) return;
+
+    setApiKeySaving(true);
+    setApiKeyMessage('Saving API key…');
+    try {
+      const result = JSON.parse(await setApiKey({ api_key: value })) as ApiKeyResult;
+      if (!result.success) throw new Error(result.error || 'Could not save the API key.');
+      setApiKeyConfigured(true);
+      setApiKeyInput(result.api_key ?? value);
+      setApiKeyMessage('API key saved.');
+    } catch (error) {
+      setApiKeyMessage(error instanceof Error ? error.message : 'Could not save the API key.');
+    } finally {
+      setApiKeySaving(false);
+    }
+  };
+
   const updateFilterDefault = (key: keyof FilterState) => {
     setSettings((current) => {
       const nextFilters = {
@@ -663,6 +757,34 @@ const SettingsView = ({
 
   return (
     <div className="sgdbSettingsPage">
+      <section className="sgdbSettingsSection">
+        <h2>SteamGridDB API Key</h2>
+        <p className="sgdbSettingsHelp">Enter your personal SteamGridDB API key. It is saved locally in this plugin's settings.</p>
+        <form
+          className="sgdbApiKeyForm"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void saveApiKey();
+          }}
+        >
+          <input
+            className="sgdbApiKeyInput"
+            type="text"
+            value={apiKey}
+            maxLength={256}
+            autoComplete="off"
+            spellCheck={false}
+            aria-label="SteamGridDB API key"
+            placeholder="Paste your API key"
+            onChange={(event) => setApiKeyInput(event.currentTarget.value)}
+          />
+          <button className="sgdbSettingsPill sgdbTextPill" type="submit" disabled={!apiKey.trim() || apiKeySaving}>
+            {apiKeySaving ? 'Saving…' : 'Save Key'}
+          </button>
+        </form>
+        <div className={`sgdbApiKeyStatus ${apiKeyConfigured ? 'configured' : ''}`} role="status">{apiKeyMessage}</div>
+      </section>
+
       <section className="sgdbSettingsSection">
         <h2>Filter Defaults</h2>
         <div className="sgdbSettingsToggleGrid">
@@ -1065,6 +1187,41 @@ const SteamGridDBContent = ({
     }
   }, []);
 
+  const openCollectionPicker = useCallback(async (asset: SGDBAsset, type: SGDBAssetType, anchor: EventTarget) => {
+    try {
+      const collections = await loadCollections();
+      if (collections.length === 0) {
+        notice('No Collections', 'No SteamGridDB collections were found for this account.');
+        return;
+      }
+
+      showContextMenu(
+        <Menu label="SteamGridDB collections">
+          {collections.map((collection) => (
+            <MenuItem
+              key={collection.id}
+              onSelected={() => {
+                void addAssetToCollection(collection.id, asset, type)
+                  .then(() => notice('Added to Collection', `${ASSET_LABEL[type]} added to ${collection.name}.`))
+                  .catch((err) => notice('Add to Collection Failed', err instanceof Error ? err.message : String(err)));
+              }}
+            >
+              {collection.name}
+            </MenuItem>
+          ))}
+        </Menu>,
+        anchor,
+        {
+          bPreferPopLeft: false,
+          bOverlapVertical: true,
+          bShiftToFitWindow: true,
+        },
+      );
+    } catch (err) {
+      notice('Collections Failed', err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
   const viewProps = {
     assetType,
     setAssetType,
@@ -1082,6 +1239,7 @@ const SteamGridDBContent = ({
     applyingId,
     applyAsset,
     openAssetPage,
+    openCollectionPicker,
     showExternalLinks: settings.showExternalLinks,
     showCreatorNames: settings.showCreatorNames,
     loadAssets,
@@ -1795,6 +1953,53 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   font-weight: 700;
 }
 
+.sgdbSettingsHelp {
+  margin: -4px 0 12px;
+  color: var(--sgdb-text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.sgdbApiKeyForm {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.sgdbApiKeyInput {
+  min-width: 0;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--sgdb-border);
+  border-radius: 5px;
+  color: var(--sgdb-text-strong);
+  background: var(--sgdb-border-soft);
+  font-family: monospace;
+  font-size: 14px;
+}
+
+.sgdbApiKeyInput:focus {
+  border-color: var(--sgdb-slider-thumb);
+  outline: 1px solid var(--sgdb-slider-thumb);
+}
+
+.sgdbApiKeyForm button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.sgdbApiKeyStatus {
+  min-height: 18px;
+  margin-top: 9px;
+  color: var(--sgdb-text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.sgdbApiKeyStatus.configured {
+  color: #66c0f4;
+}
+
 .sgdbThemePresetSelect {
   min-width: 184px;
   height: 34px;
@@ -2447,6 +2652,61 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   opacity: 0;
   transform: translateY(6px);
   transition: opacity 120ms ease, transform 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.sgdbCollectionAddButton {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  width: clamp(23px, 13cqw, 38px);
+  height: clamp(23px, 13cqw, 38px);
+  padding: 0;
+  border: 1px solid var(--sgdb-border-soft);
+  border-top-width: 0;
+  border-right-width: 0;
+  border-radius: 0 0 0 clamp(3px, 2.4cqw, 4px);
+  color: var(--sgdb-text-control);
+  background: color-mix(in srgb, var(--sgdb-surface-hover) 88%, transparent);
+  box-shadow: none;
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(-6px);
+  transition: opacity 120ms ease, transform 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.image-wrap.sgdbAsset.type-grid_l .sgdbCollectionAddButton,
+.image-wrap.sgdbAsset.type-hero .sgdbCollectionAddButton,
+.image-wrap.sgdbAsset.type-logo .sgdbCollectionAddButton {
+  width: clamp(20px, min(7.5cqw, 24cqh), 33px);
+  height: clamp(20px, min(7.5cqw, 24cqh), 33px);
+  border-radius: 0 0 0 clamp(3px, min(2cqw, 4cqh), 5px);
+}
+
+.image-wrap.sgdbAsset:hover .sgdbCollectionAddButton,
+.image-wrap.sgdbAsset.gpfocus .sgdbCollectionAddButton,
+.image-wrap.sgdbAsset:focus-within .sgdbCollectionAddButton {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.sgdbCollectionAddButton:hover,
+.sgdbCollectionAddButton:focus-visible {
+  color: var(--sgdb-text);
+  background: var(--sgdb-surface-hover);
+  outline: 0;
+}
+
+.sgdbCollectionAddIcon {
+  width: clamp(18px, 10cqw, 25px);
+  height: clamp(18px, 10cqw, 25px);
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.35;
+  stroke-linecap: round;
 }
 
 .image-wrap.sgdbAsset.type-grid_l .sgdbExternalLinkButton,

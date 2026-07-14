@@ -9,6 +9,7 @@ SteamGridDB for Millennium is a Steam artwork browser and manager built for the 
 - Apply artwork directly to Steam apps through Steam's frontend artwork APIs.
 - Download and apply Steam app icons through the Lua backend.
 - Reset custom artwork back to Steam defaults.
+- Add grids, wide grids, heroes, logos, and icons to SteamGridDB account collections.
 - Big Picture/controller-friendly artwork browsing with automatic loading while scrolling.
 - Theme-aware interface designed to blend with Fluenty-style dark Steam themes.
 - Built-in Fluenty Dark, Steam Blue, OLED Black, Midnight Violet, and Ember theme presets.
@@ -26,6 +27,16 @@ Steam/millennium/plugins/SteamGridDB
 ```
 
 Restart Steam or reload Millennium plugins after installing.
+
+## SteamGridDB API Key
+
+A personal SteamGridDB API key is required. Open the plugin settings, paste your key into the **SteamGridDB API Key** field, and select **Save Key**. The key is stored locally in the plugin's `settings.json` file and is used for artwork browsing and account collection requests.
+
+## Account Collections
+
+Hover or focus an artwork tile and select the `+` button in its top-right corner. Choose a collection from the Steam context menu to add that artwork to your SteamGridDB account. Collections support grids, wide grids, heroes, logos, and icons.
+
+SteamGridDB's collection endpoints are not part of its public API documentation and may change without notice. The plugin keeps collection requests isolated in its backend and reports API failures through Steam notifications.
 
 ## Building
 
