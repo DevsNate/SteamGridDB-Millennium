@@ -1,5 +1,5 @@
 import { DialogButton, Focusable, GamepadButton, SliderField, Spinner } from '@steambrew/client';
-import { Dispatch, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Dispatch, SetStateAction, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { AssetState, EndState, FilterState, LoadingState, PageState, SGDBAsset, SGDBAssetType, ZoomState } from '../index';
 
 type ViewProps = {
@@ -21,6 +21,7 @@ type ViewProps = {
   openAssetPage: (asset: SGDBAsset, type: SGDBAssetType) => Promise<void>;
   openCollectionPicker: (asset: SGDBAsset, type: SGDBAssetType, anchor: EventTarget) => void;
   showExternalLinks: boolean;
+  showCollectionButtons: boolean;
   showCreatorNames: boolean;
   loadAssets: (type: SGDBAssetType, nextPage?: number, append?: boolean) => Promise<void>;
   resetCurrentTab: () => void;
@@ -44,6 +45,7 @@ const VIEW_LABEL: Record<ViewTab, string> = {
 };
 type FocusZone = 'tabs' | 'content';
 const isAnimatedAsset = (src: string) => /\.(webm|mp4)(\?|$)/i.test(src);
+const DEFAULT_VISIBLE_ROWS = 7;
 
 const assetGridStyle = (assetType: SGDBAssetType, zoom: number) => {
   return { ['--asset-size' as string]: `${zoom}px` };
@@ -118,6 +120,7 @@ export const GamepadView = ({
   openAssetPage,
   openCollectionPicker,
   showExternalLinks,
+  showCollectionButtons,
   showCreatorNames,
   loadAssets,
   resetCurrentTab,
@@ -129,11 +132,28 @@ export const GamepadView = ({
   const internalTabChangeRef = useRef(false);
   const lastBumperAtRef = useRef(0);
   const pendingArtworkFocusRef = useRef(true);
+  const preserveScrollTopRef = useRef<number | null>(null);
   const lastFocusedAssetIdRef = useRef<number | null>(null);
+  const restoreAssetFocusIdRef = useRef<number | null>(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const autoLoadPendingRef = useRef(false);
   const [activeTab, setActiveTab] = useState<ViewTab>(assetType);
   const [focusZone, setFocusZone] = useState<FocusZone>('content');
+  const [autoLoadReadyType, setAutoLoadReadyType] = useState<SGDBAssetType | null>(null);
+  const [visibleRowsByType, setVisibleRowsByType] = useState<Record<SGDBAssetType, number>>({
+    grid_p: DEFAULT_VISIBLE_ROWS,
+    grid_l: DEFAULT_VISIBLE_ROWS,
+    hero: DEFAULT_VISIBLE_ROWS,
+    logo: DEFAULT_VISIBLE_ROWS,
+    icon: DEFAULT_VISIBLE_ROWS,
+  });
+  const [columnCountByType, setColumnCountByType] = useState<Record<SGDBAssetType, number>>({
+    grid_p: 1,
+    grid_l: 1,
+    hero: 1,
+    logo: 1,
+    icon: 1,
+  });
   const tabAssets = assetsByType[assetType];
   const tabLoading = loadingByType[assetType];
   const tabEndReached = endReachedByType[assetType];
@@ -145,16 +165,25 @@ export const GamepadView = ({
   const currentSliderValue = zoomToSliderValue(assetType, currentZoom, slider);
   const tabGridStyle = assetGridStyle(assetType, currentZoom);
   const sliderProgress = ((currentSliderValue - slider.min) / (slider.max - slider.min)) * 100;
-  const visibleAssets = tabAssets;
-  const canAutoLoadMore = tabAssets.length > 0 && !tabEndReached;
+  const columnCount = columnCountByType[assetType];
+  const rawVisibleLimit = visibleRowsByType[assetType] * columnCount;
+  const rawVisibleCount = Math.min(tabAssets.length, rawVisibleLimit);
+  const hasMoreAfterRawVisible = tabAssets.length > rawVisibleCount || !tabEndReached;
+  const visibleCount = hasMoreAfterRawVisible && rawVisibleCount >= columnCount
+    ? Math.max(columnCount, Math.floor(rawVisibleCount / columnCount) * columnCount)
+    : rawVisibleCount;
+  const visibleAssets = tabAssets.slice(0, visibleCount);
+  const hasHiddenLoadedAssets = tabAssets.length > visibleAssets.length;
+  const canShowMore = tabAssets.length > 0 && (hasHiddenLoadedAssets || !tabEndReached);
   const selectTab = useCallback((tab: ViewTab) => {
     activeTabRef.current = tab;
     setActiveTab(tab);
     internalTabChangeRef.current = true;
     pendingArtworkFocusRef.current = true;
+    setAutoLoadReadyType(isGamepadUI ? null : tab);
     setFocusZone('content');
     setAssetType(tab);
-  }, [setAssetType]);
+  }, [isGamepadUI, setAssetType]);
   const selectRelativeTab = useCallback((direction: 1 | -1) => {
     const index = viewTabs.indexOf(activeTabRef.current);
     const next = viewTabs[(index + direction + viewTabs.length) % viewTabs.length];
@@ -260,17 +289,44 @@ export const GamepadView = ({
     }
   }, [applyAsset, focusFirstAssetAfterApply]);
   const showMoreAssets = useCallback(() => {
-    if (tabLoading || tabEndReached || autoLoadPendingRef.current) {
+    if (tabLoading || autoLoadPendingRef.current) {
       return;
     }
 
     autoLoadPendingRef.current = true;
-    pendingArtworkFocusRef.current = false;
-    void loadAssets(assetType, pagesByType[assetType] + 1, true);
-  }, [assetType, loadAssets, pagesByType, tabEndReached, tabLoading]);
+    const scroller = gridRef.current?.closest<HTMLElement>('.tabcontents-wrap');
+    if (isGamepadUI) {
+      preserveScrollTopRef.current = scroller?.scrollTop ?? null;
+      const lastFocusedAssetId = lastFocusedAssetIdRef.current;
+      restoreAssetFocusIdRef.current = lastFocusedAssetId && visibleAssets.some((asset) => asset.id === lastFocusedAssetId)
+        ? lastFocusedAssetId
+        : null;
+    } else {
+      preserveScrollTopRef.current = null;
+      restoreAssetFocusIdRef.current = null;
+    }
+
+    if (hasHiddenLoadedAssets || !tabEndReached) {
+      setVisibleRowsByType((current) => ({ ...current, [assetType]: current[assetType] + DEFAULT_VISIBLE_ROWS }));
+    }
+
+    if (!tabEndReached) {
+      void loadAssets(assetType, pagesByType[assetType] + 1, true);
+    }
+  }, [assetType, hasHiddenLoadedAssets, isGamepadUI, loadAssets, pagesByType, tabEndReached, tabLoading, visibleAssets]);
   const resetCurrentArtwork = () => {
     void resetArtwork(assetType);
   };
+
+  useEffect(() => {
+    setVisibleRowsByType({
+      grid_p: DEFAULT_VISIBLE_ROWS,
+      grid_l: DEFAULT_VISIBLE_ROWS,
+      hero: DEFAULT_VISIBLE_ROWS,
+      logo: DEFAULT_VISIBLE_ROWS,
+      icon: DEFAULT_VISIBLE_ROWS,
+    });
+  }, [filters]);
 
   useEffect(() => {
     activeTabRef.current = activeTab;
@@ -287,28 +343,6 @@ export const GamepadView = ({
       setActiveTab(assetType);
     }
   }, [activeTab, assetType]);
-
-  useEffect(() => {
-    autoLoadPendingRef.current = false;
-  }, [assetType, tabAssets.length, tabLoading]);
-
-  useEffect(() => {
-    const scroller = gridRef.current?.closest<HTMLElement>('.tabcontents-wrap');
-    if (!scroller || !canAutoLoadMore) {
-      return undefined;
-    }
-
-    const maybeLoadMore = () => {
-      const distanceToBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
-      if (distanceToBottom <= Math.max(480, scroller.clientHeight * 0.35)) {
-        showMoreAssets();
-      }
-    };
-
-    scroller.addEventListener('scroll', maybeLoadMore, { passive: true });
-    maybeLoadMore();
-    return () => scroller.removeEventListener('scroll', maybeLoadMore);
-  }, [canAutoLoadMore, showMoreAssets, visibleAssets.length]);
 
   useEffect(() => {
     if (!isGamepadUI || !pendingArtworkFocusRef.current || tabLoading || visibleAssets.length === 0) {
@@ -331,18 +365,108 @@ export const GamepadView = ({
       }
 
       setFocusZone('content');
+      const targetAssetId = Number(target.dataset.sgdbAssetId);
+      if (Number.isFinite(targetAssetId)) {
+        lastFocusedAssetIdRef.current = targetAssetId;
+      }
       target.setAttribute('tabindex', '0');
       if (document.activeElement instanceof HTMLElement && document.activeElement !== target) {
         document.activeElement.blur();
       }
       target.focus();
+      setAutoLoadReadyType(assetType);
     };
 
     window.requestAnimationFrame(() => window.requestAnimationFrame(focusFirstAsset));
   }, [assetType, clearTabFocusArtifacts, isGamepadUI, tabLoading, visibleAssets.length]);
 
+  useEffect(() => {
+    autoLoadPendingRef.current = false;
+  }, [assetType, tabLoading, visibleAssets.length]);
+
+  useEffect(() => {
+    if (!isGamepadUI) {
+      setAutoLoadReadyType(assetType);
+    }
+  }, [assetType, isGamepadUI]);
+
+  useEffect(() => {
+    const scroller = gridRef.current?.closest<HTMLElement>('.tabcontents-wrap');
+    if (!scroller || autoLoadReadyType !== assetType || !canShowMore) {
+      return undefined;
+    }
+
+    const maybeLoadMore = () => {
+      const distanceToBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+      if (distanceToBottom <= Math.max(480, scroller.clientHeight * 0.35)) {
+        showMoreAssets();
+      }
+    };
+
+    scroller.addEventListener('scroll', maybeLoadMore, { passive: true });
+    maybeLoadMore();
+    return () => scroller.removeEventListener('scroll', maybeLoadMore);
+  }, [assetType, autoLoadReadyType, canShowMore, showMoreAssets, visibleAssets.length]);
+
+  useLayoutEffect(() => {
+    if (preserveScrollTopRef.current === null && restoreAssetFocusIdRef.current === null) {
+      return;
+    }
+
+    const scrollTop = preserveScrollTopRef.current;
+    preserveScrollTopRef.current = null;
+    const restoreAssetId = restoreAssetFocusIdRef.current;
+    restoreAssetFocusIdRef.current = null;
+    const scroller = gridRef.current?.closest<HTMLElement>('.tabcontents-wrap');
+    if (scroller && scrollTop !== null) {
+      scroller.scrollTop = scrollTop;
+      window.requestAnimationFrame(() => {
+        scroller.scrollTop = scrollTop;
+      });
+    }
+
+    if (restoreAssetId !== null) {
+      window.requestAnimationFrame(() => {
+        const target = gridRef.current?.querySelector<HTMLElement>(`[data-sgdb-asset-id="${restoreAssetId}"]`);
+        target?.focus();
+      });
+    }
+  }, [tabLoading, visibleAssets.length]);
+
+  useEffect(() => {
+    const grid = gridRef.current;
+    if (!grid) return undefined;
+
+    const updateColumns = () => {
+      const firstRowTop = grid.querySelector<HTMLElement>('.asset-box-wrap')?.offsetTop;
+      const rowColumns = firstRowTop === undefined
+        ? 0
+        : Array.from(grid.querySelectorAll<HTMLElement>('.asset-box-wrap')).filter((child) => Math.abs(child.offsetTop - firstRowTop) <= 2).length;
+      const cssColumns = window.getComputedStyle(grid).gridTemplateColumns.split(' ').filter((track) => track && track !== 'none').length;
+      const columns = Math.max(rowColumns, cssColumns, 1);
+      setColumnCountByType((current) => current[assetType] === columns ? current : { ...current, [assetType]: columns });
+    };
+
+    let frame = window.requestAnimationFrame(() => {
+      updateColumns();
+      frame = window.requestAnimationFrame(updateColumns);
+    });
+    const observer = new ResizeObserver(updateColumns);
+    observer.observe(grid);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [assetType, visibleAssets.length, zoomByType]);
+
   return (
     <>
+      {isGamepadUI ? (
+        <div className="sgdbResultsState" aria-live="polite">
+          {tabLoading ? 'Loading' : `${tabAssets.length} ${ASSET_LABEL[assetType].toLowerCase()} results`}
+        </div>
+      ) : null}
+
       <div className="sgdbManualTabs sgdbGamepadTabs">
         {viewTabs.map((tab) => (
           <button
@@ -365,12 +489,14 @@ export const GamepadView = ({
       </div>
 
       <div className="tabcontents-wrap">
+        {!isGamepadUI ? (
+          <div className="sgdbResultsState" aria-live="polite">
+            {tabLoading ? 'Loading' : `${tabAssets.length} ${ASSET_LABEL[assetType].toLowerCase()} results`}
+          </div>
+        ) : null}
+
         <div className={`spinnyboi ${!tabLoading || tabAssets.length > 0 ? 'loaded' : ''}`}>
           <img alt="Loading..." src="/images/steam_spinner.png" />
-        </div>
-
-        <div className="sgdbResultsState" aria-live="polite">
-          {tabLoading ? 'Loading' : `${tabAssets.length} ${ASSET_LABEL[assetType].toLowerCase()} results`}
         </div>
 
         <>
@@ -458,7 +584,7 @@ export const GamepadView = ({
           </Focusable>
         ) : null}
 
-        <Focusable key={assetType} ref={gridRef} id="images-container" className={`sgdbGrid ${assetType} ${canAutoLoadMore ? 'hasMore' : ''} ${filtersOpen ? 'filtersOpen' : ''}`} style={tabGridStyle} flow-children="right" onGamepadFocus={() => setFocusZone('content')} onMouseEnter={() => setFocusZone('content')} onButtonDown={handleTabBumper}>
+        <Focusable key={assetType} ref={gridRef} id="images-container" className={`sgdbGrid ${assetType} ${canShowMore ? 'hasMore' : ''} ${filtersOpen ? 'filtersOpen' : ''}`} style={tabGridStyle} flow-children="right" onGamepadFocus={() => setFocusZone('content')} onMouseEnter={() => setFocusZone('content')} onButtonDown={handleTabBumper}>
           {visibleAssets.map((asset) => (
             <div className="asset-box-wrap" key={`${assetType}-${asset.id}`}>
               {(() => {
@@ -487,19 +613,21 @@ export const GamepadView = ({
                 role="button"
               >
                 <AssetPreview asset={asset} assetType={assetType} />
-                <button
-                  className="sgdbCollectionAddButton"
-                  type="button"
-                  aria-label="Add to collection"
-                  title="Add to collection"
-                  onClick={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    openCollectionPicker(asset, assetType, event.currentTarget);
-                  }}
-                >
-                  <AddToCollectionIcon />
-                </button>
+                {showCollectionButtons ? (
+                  <button
+                    className="sgdbCollectionAddButton"
+                    type="button"
+                    aria-label="Add to collection"
+                    title="Add to collection"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      openCollectionPicker(asset, assetType, event.currentTarget);
+                    }}
+                  >
+                    <AddToCollectionIcon />
+                  </button>
+                ) : null}
                 {showExternalLinks ? (
                   <button
                     className="sgdbExternalLinkButton"
@@ -542,7 +670,7 @@ export const GamepadView = ({
           ) : null}
         </Focusable>
 
-        {canAutoLoadMore ? <div className={`sgdbMoreRevealSpacer ${tabLoading ? 'loading' : ''}`} aria-hidden="true" /> : null}
+        {canShowMore ? <div className={`sgdbMoreRevealSpacer ${tabLoading ? 'loading' : ''}`} aria-hidden="true" /> : null}
         </>
       </div>
     </>

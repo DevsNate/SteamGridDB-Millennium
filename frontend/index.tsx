@@ -3,6 +3,7 @@ import {
   afterPatch,
   definePlugin,
   DialogButton,
+  DropdownItem,
   fakeRenderComponent,
   findInReactTree,
   findInTree,
@@ -13,10 +14,14 @@ import {
   MenuItem,
   Millennium,
   Navigation,
+  PanelSection,
+  PanelSectionRow,
   routerHook,
   showContextMenu,
   showModal,
   toaster,
+  TextField,
+  ToggleField,
   useParams,
 } from '@steambrew/client';
 import { Dispatch, FC, SetStateAction, useCallback, useEffect, useMemo, useState } from 'react';
@@ -80,8 +85,8 @@ type ThemePreset = {
 };
 
 type PluginSettings = {
-  filterDefaults: FilterState;
   showExternalLinks: boolean;
+  showCollectionButtons: boolean;
   showCreatorNames: boolean;
   preloadPages: number;
   spaceThemeCompatibility: boolean;
@@ -299,8 +304,8 @@ const themePresetBackgroundPaint = (key: ThemePresetKey, fallback: string) =>
   themePresets.find((preset) => preset.key === key)?.backgroundPaint ?? fallback;
 
 const defaultSettings: PluginSettings = {
-  filterDefaults: defaultFilters,
-  showExternalLinks: true,
+  showExternalLinks: false,
+  showCollectionButtons: false,
   showCreatorNames: true,
   preloadPages: 0,
   spaceThemeCompatibility: false,
@@ -400,16 +405,16 @@ const sameThemeColors = (left: ThemeColorSettings, right: ThemeColorSettings) =>
 const themePresetFromColors = (colors: ThemeColorSettings) =>
   themePresets.find((preset) => sameThemeColors(themePresetColors(preset.key, colors), colors))?.key ?? 'custom';
 
-const filterStateByType = (fallback: FilterState): FilterStateByType => ({
-  grid_p: { ...fallback },
-  grid_l: { ...fallback },
-  hero: { ...fallback },
-  logo: { ...fallback },
-  icon: { ...fallback },
+const filterStateByType = (): FilterStateByType => ({
+  grid_p: { ...defaultFilters },
+  grid_l: { ...defaultFilters },
+  hero: { ...defaultFilters },
+  logo: { ...defaultFilters },
+  icon: { ...defaultFilters },
 });
 
-const loadFiltersByType = (fallback: FilterState): FilterStateByType => {
-  const defaults = filterStateByType(fallback);
+const loadFiltersByType = (): FilterStateByType => {
+  const defaults = filterStateByType();
 
   try {
     const raw = window.localStorage.getItem(FILTER_STORAGE_KEY);
@@ -420,7 +425,7 @@ const loadFiltersByType = (fallback: FilterState): FilterStateByType => {
     const saved = JSON.parse(raw) as Partial<Record<SGDBAssetType, unknown>>;
     return tabs.reduce((current, tab) => ({
       ...current,
-      [tab]: isFilterState(saved[tab]) ? { ...fallback, ...saved[tab] } : defaults[tab],
+      [tab]: isFilterState(saved[tab]) ? { ...defaultFilters, ...saved[tab] } : defaults[tab],
     }), defaults);
   } catch {
     return defaults;
@@ -430,8 +435,8 @@ const loadFiltersByType = (fallback: FilterState): FilterStateByType => {
 const normalizeSettings = (settings: Partial<PluginSettings>): PluginSettings => {
   const themeColors = normalizeThemeColors(settings.themeColors);
   return {
-    filterDefaults: isFilterState(settings.filterDefaults) ? { ...defaultFilters, ...settings.filterDefaults } : defaultSettings.filterDefaults,
     showExternalLinks: typeof settings.showExternalLinks === 'boolean' ? settings.showExternalLinks : defaultSettings.showExternalLinks,
+    showCollectionButtons: typeof settings.showCollectionButtons === 'boolean' ? settings.showCollectionButtons : defaultSettings.showCollectionButtons,
     showCreatorNames: typeof settings.showCreatorNames === 'boolean' ? settings.showCreatorNames : defaultSettings.showCreatorNames,
     preloadPages: Math.max(0, Math.min(5, Number.isFinite(settings.preloadPages) ? Math.trunc(settings.preloadPages as number) : defaultSettings.preloadPages)),
     spaceThemeCompatibility: typeof settings.spaceThemeCompatibility === 'boolean' ? settings.spaceThemeCompatibility : defaultSettings.spaceThemeCompatibility,
@@ -657,8 +662,6 @@ const themeColorRows: { key: keyof ThemeColorSettings; label: string }[] = [
   { key: 'background', label: 'Background' },
   { key: 'surfaceHover', label: 'Selected and hover surface' },
   { key: 'gridHoverBorder', label: 'Grid hover border' },
-  { key: 'sliderTrack', label: 'Slider track' },
-  { key: 'sliderThumb', label: 'Slider thumb' },
 ];
 
 const SettingsView = ({
@@ -712,22 +715,6 @@ const SettingsView = ({
     }
   };
 
-  const updateFilterDefault = (key: keyof FilterState) => {
-    setSettings((current) => {
-      const nextFilters = {
-        ...current.filterDefaults,
-        [key]: !current.filterDefaults[key],
-      };
-      if (!nextFilters.static && !nextFilters.animated) {
-        nextFilters[key] = true;
-      }
-      return {
-        ...current,
-        filterDefaults: nextFilters,
-      };
-    });
-  };
-
   const updateThemeColor = (key: keyof ThemeColorSettings, value: string) => {
     setSettings((current) => ({
       ...current,
@@ -757,142 +744,51 @@ const SettingsView = ({
 
   return (
     <div className="sgdbSettingsPage">
-      <section className="sgdbSettingsSection">
-        <h2>SteamGridDB API Key</h2>
-        <p className="sgdbSettingsHelp">Enter your personal SteamGridDB API key. It is saved locally in this plugin's settings.</p>
-        <form
-          className="sgdbApiKeyForm"
-          onSubmit={(event) => {
+      <PanelSection title="ACCOUNT">
+        <PanelSectionRow>
+          <form className="sgdbNativeApiForm" onSubmit={(event) => {
             event.preventDefault();
             void saveApiKey();
-          }}
-        >
-          <input
-            className="sgdbApiKeyInput"
-            type="text"
-            value={apiKey}
-            maxLength={256}
-            autoComplete="off"
-            spellCheck={false}
-            aria-label="SteamGridDB API key"
-            placeholder="Paste your API key"
-            onChange={(event) => setApiKeyInput(event.currentTarget.value)}
-          />
-          <button className="sgdbSettingsPill sgdbTextPill" type="submit" disabled={!apiKey.trim() || apiKeySaving}>
-            {apiKeySaving ? 'Saving…' : 'Save Key'}
-          </button>
-        </form>
-        <div className={`sgdbApiKeyStatus ${apiKeyConfigured ? 'configured' : ''}`} role="status">{apiKeyMessage}</div>
-      </section>
+          }}>
+            <TextField label="SteamGridDB API key" description="Required for browsing and collections. Saved locally on this device." value={apiKey} onChange={(event) => setApiKeyInput(event.currentTarget.value)} />
+            <div className="sgdbNativeApiActions">
+              <span className={`sgdbApiKeyStatus ${apiKeyConfigured ? 'configured' : ''}`} role="status">{apiKeyMessage}</span>
+              <DialogButton type="submit" disabled={!apiKey.trim() || apiKeySaving}>{apiKeySaving ? 'Saving…' : 'Save Key'}</DialogButton>
+            </div>
+          </form>
+        </PanelSectionRow>
+      </PanelSection>
 
-      <section className="sgdbSettingsSection">
-        <h2>Filter Defaults</h2>
-        <div className="sgdbSettingsToggleGrid">
-          {([
-            ['static', 'Static'],
-            ['animated', 'Animated'],
-            ['adult', 'Adult'],
-            ['humor', 'Humor'],
-            ['epilepsy', 'Epilepsy'],
-          ] as [keyof FilterState, string][]).map(([key, label]) => (
-            <button
-              key={key}
-              className={`sgdbSettingsPill sgdbTextPill ${settings.filterDefaults[key] ? 'selected' : ''}`}
-              type="button"
-              onClick={() => updateFilterDefault(key)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </section>
+      <PanelSection title="ARTWORK BROWSER">
+        <PanelSectionRow><ToggleField label="SteamGridDB link button" description="Show the external-link action on artwork." checked={settings.showExternalLinks} onChange={(showExternalLinks) => setSettings((current) => ({ ...current, showExternalLinks }))} /></PanelSectionRow>
+        <PanelSectionRow><ToggleField label="Add to collection button" description="Show the collection action on artwork." checked={settings.showCollectionButtons} onChange={(showCollectionButtons) => setSettings((current) => ({ ...current, showCollectionButtons }))} /></PanelSectionRow>
+        <PanelSectionRow><ToggleField label="Asset creator names" description="Display the uploader below each artwork item." checked={settings.showCreatorNames} onChange={(showCreatorNames) => setSettings((current) => ({ ...current, showCreatorNames }))} /></PanelSectionRow>
+        <PanelSectionRow>
+          <TextField label="Additional pages to preload" description="Load up to five extra result pages in advance." value={String(settings.preloadPages)} mustBeNumeric rangeMin={0} rangeMax={5} onChange={(event) => {
+            const preloadPages = Math.max(0, Math.min(5, Number.parseInt(event.currentTarget.value || '0', 10)));
+            setSettings((current) => ({ ...current, preloadPages }));
+          }} />
+        </PanelSectionRow>
+        <PanelSectionRow><ToggleField label="SpaceTheme compatibility" description="Apply layout adjustments intended for SpaceTheme." checked={settings.spaceThemeCompatibility} onChange={(spaceThemeCompatibility) => setSettings((current) => ({ ...current, spaceThemeCompatibility }))} /></PanelSectionRow>
+      </PanelSection>
 
-      <section className="sgdbSettingsSection">
-        <h2>Artwork Browser</h2>
-        <label className="sgdbSettingsRow">
-          <span>SteamGridDB link button</span>
-          <input
-            type="checkbox"
-            checked={settings.showExternalLinks}
-            onChange={(event) => {
-              const showExternalLinks = event.currentTarget.checked;
-              setSettings((current) => ({ ...current, showExternalLinks }));
-            }}
-          />
-        </label>
-        <label className="sgdbSettingsRow">
-          <span>Asset creator names</span>
-          <input
-            type="checkbox"
-            checked={settings.showCreatorNames}
-            onChange={(event) => {
-              const showCreatorNames = event.currentTarget.checked;
-              setSettings((current) => ({ ...current, showCreatorNames }));
-            }}
-          />
-        </label>
-        <label className="sgdbSettingsRow">
-          <span>Additional pages to preload</span>
-          <input
-            type="number"
-            min={0}
-            max={5}
-            step={1}
-            value={settings.preloadPages}
-            onChange={(event) => {
-              const preloadPages = Math.max(0, Math.min(5, Number.parseInt(event.currentTarget.value || '0', 10)));
-              setSettings((current) => ({ ...current, preloadPages }));
-            }}
-          />
-        </label>
-        <label className="sgdbSettingsRow">
-          <span>SpaceTheme compatibility</span>
-          <input
-            type="checkbox"
-            checked={settings.spaceThemeCompatibility}
-            onChange={(event) => {
-              const spaceThemeCompatibility = event.currentTarget.checked;
-              setSettings((current) => ({ ...current, spaceThemeCompatibility }));
-            }}
-          />
-        </label>
-      </section>
-
-      <section className="sgdbSettingsSection">
-        <div className="sgdbSettingsHeaderRow">
-          <h2>Theme Colors</h2>
-          <button className="sgdbSettingsResetButton sgdbTextPill" type="button" onClick={resetThemeColors}>
-            Reset
-          </button>
-        </div>
-        <label className="sgdbSettingsRow sgdbSettingsPresetRow">
-          <span>Theme preset</span>
-          <select
-            className="sgdbThemePresetSelect"
-            value={settings.themePreset}
-            onChange={(event) => updateThemePreset(event.currentTarget.value as ThemePresetKey)}
-          >
-            {themePresets.map((preset) => (
-              <option key={preset.key} value={preset.key}>{preset.label}</option>
-            ))}
-            <option value="custom">Custom</option>
-          </select>
-        </label>
+      <PanelSection title="APPEARANCE">
+        <PanelSectionRow>
+          <DropdownItem label="Artwork browser theme" description="Choose a preset or fine-tune the colors below." rgOptions={[...themePresets.map((preset) => ({ data: preset.key, label: preset.label })), { data: 'custom', label: 'Custom' }]} selectedOption={settings.themePreset} onChange={(option) => updateThemePreset(option.data as ThemePresetKey)} />
+        </PanelSectionRow>
         {themeColorRows.map(({ key, label }) => (
-          <label className="sgdbSettingsRow sgdbSettingsColorRow" key={key}>
-            <span>{label}</span>
-            <span className="sgdbColorControl">
-              <span className="sgdbColorValue">{settings.themeColors[key]}</span>
-              <input
-                type="color"
-                value={settings.themeColors[key]}
-                onChange={(event) => updateThemeColor(key, event.currentTarget.value)}
-                aria-label={label}
-              />
-            </span>
-          </label>
+          <PanelSectionRow key={key}>
+            <label className="sgdbNativeColorRow">
+              <span>{label}</span>
+              <span className="sgdbColorControl">
+                <span className="sgdbColorValue">{settings.themeColors[key]}</span>
+                <input type="color" value={settings.themeColors[key]} onChange={(event) => updateThemeColor(key, event.currentTarget.value)} aria-label={label} />
+              </span>
+            </label>
+          </PanelSectionRow>
         ))}
-      </section>
+        <PanelSectionRow><DialogButton onClick={resetThemeColors}>Reset colors</DialogButton></PanelSectionRow>
+      </PanelSection>
     </div>
   );
 };
@@ -916,7 +812,7 @@ const SteamGridDBContent = ({
   const [pagesByType, setPagesByType] = useState<PageState>(() => emptyPages());
   const [loadingByType, setLoadingByType] = useState<LoadingState>(() => emptyLoading());
   const [endReachedByType, setEndReachedByType] = useState<EndState>(() => emptyEnd());
-  const [filtersByType, setFiltersByType] = useState<FilterStateByType>(() => loadFiltersByType(settings.filterDefaults));
+  const [filtersByType, setFiltersByType] = useState<FilterStateByType>(() => loadFiltersByType());
   const [zoomByMode, setZoomByMode] = useState<ZoomModeState>(() => loadZoomByMode());
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [applyingId, setApplyingId] = useState<number | null>(null);
@@ -927,7 +823,7 @@ const SteamGridDBContent = ({
   const isGamepadUI = uiMode === EUIMode.GamePad;
   const zoomModeKey = isGamepadUI ? 'gamepad' : 'desktop';
   const zoomByType = zoomByMode[zoomModeKey];
-  const filters = filtersByType[assetType] ?? settings.filterDefaults;
+  const filters = filtersByType[assetType] ?? defaultFilters;
   const rootStyle = {
     '--sgdb-bg': settings.themeColors.background,
     '--sgdb-bg-paint': themePresetBackgroundPaint(settings.themePreset, settings.themeColors.background),
@@ -968,14 +864,14 @@ const SteamGridDBContent = ({
 
   const setFilters = useCallback<Dispatch<SetStateAction<FilterState>>>((action) => {
     setFiltersByType((current) => {
-      const currentFilters = current[assetType] ?? settings.filterDefaults;
+      const currentFilters = current[assetType] ?? defaultFilters;
       const nextFilters = typeof action === 'function' ? action(currentFilters) : action;
       return {
         ...current,
         [assetType]: nextFilters,
       };
     });
-  }, [assetType, settings.filterDefaults]);
+  }, [assetType]);
 
   useEffect(() => {
     const nextAppId = normalizeAppIdText(initialAppId) ?? (allowAppIdFallback ? fallbackAppIdText() : null);
@@ -1241,6 +1137,7 @@ const SteamGridDBContent = ({
     openAssetPage,
     openCollectionPicker,
     showExternalLinks: settings.showExternalLinks,
+    showCollectionButtons: settings.showCollectionButtons,
     showCreatorNames: settings.showCreatorNames,
     loadAssets,
     resetCurrentTab,
@@ -1249,7 +1146,7 @@ const SteamGridDBContent = ({
   };
 
   return (
-    <div className={`sgdbRoot sgdbGamepad ${isGamepadUI ? 'sgdbBigPicture' : 'sgdbDesktopToolbar'} ${settings.spaceThemeCompatibility ? 'sgdbSpaceThemeCompat' : ''} ${popout ? 'sgdbPopoutContent' : ''}`} id="sgdb-wrap" style={rootStyle}>
+    <div className={`sgdbRoot sgdbGamepad ${isGamepadUI ? 'sgdbBigPicture' : 'sgdbDesktopToolbar'} ${settings.spaceThemeCompatibility ? 'sgdbSpaceThemeCompat' : ''} ${popout ? 'sgdbPopoutContent' : ''} ${hasAppId ? '' : 'sgdbSettingsRoot'}`} id="sgdb-wrap" style={rootStyle}>
       <style>{styles}</style>
       {hasAppId ? <GamepadView {...viewProps} /> : <SettingsView settings={settings} setSettings={setSettings} />}
     </div>
@@ -1492,12 +1389,34 @@ const styles = `
   background: transparent;
 }
 
-body:has(#sgdb-wrap),
-body:has(#sgdb-wrap) [class*="FullModal"],
-body:has(#sgdb-wrap) [class*="DialogContent"],
-body:has(#sgdb-wrap) [class*="GamepadDialogContent"],
-body:has(#sgdb-wrap) [class*="ModalPosition"] {
+body:has(#sgdb-wrap:not(.sgdbSettingsRoot)),
+body:has(#sgdb-wrap:not(.sgdbSettingsRoot)) [class*="FullModal"],
+body:has(#sgdb-wrap:not(.sgdbSettingsRoot)) [class*="DialogContent"],
+body:has(#sgdb-wrap:not(.sgdbSettingsRoot)) [class*="GamepadDialogContent"],
+body:has(#sgdb-wrap:not(.sgdbSettingsRoot)) [class*="ModalPosition"] {
   background: var(--sgdb-bg) !important;
+}
+
+.sgdbRoot.sgdbSettingsRoot {
+  margin-top: 0;
+  background: transparent !important;
+  box-shadow: none;
+}
+
+.sgdbRoot.sgdbSettingsRoot::before {
+  display: none;
+}
+
+body:has(#sgdb-wrap.sgdbSettingsRoot),
+body:has(#sgdb-wrap.sgdbSettingsRoot) * {
+  scrollbar-width: none;
+}
+
+body:has(#sgdb-wrap.sgdbSettingsRoot)::-webkit-scrollbar,
+body:has(#sgdb-wrap.sgdbSettingsRoot) *::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
 }
 
 body:has(#sgdb-wrap.sgdbDesktopToolbar.sgdbPopoutContent) [class*="FullModal"],
@@ -1871,34 +1790,244 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 }
 
 .sgdbSettingsPage {
-  width: min(680px, calc(100% - 48px));
-  margin: 24px auto;
+  width: min(760px, calc(100% - 10px));
+  margin: 12px auto 32px;
+  padding-bottom: 6px;
   color: var(--sgdb-text);
+  box-sizing: border-box;
 }
 
-.sgdbSettingsSection {
-  padding: 18px 0;
-  border-bottom: 1px solid var(--sgdb-border-soft);
+.sgdbSettingsIntro {
+  margin-bottom: 12px;
+  padding: 0 2px;
 }
 
-.sgdbSettingsSection h2 {
-  margin: 0 0 14px;
+.sgdbSettingsIntro h1 {
+  margin: 5px 0 6px;
   color: var(--sgdb-text-strong);
-  font-size: 18px;
-  font-weight: 900;
-  letter-spacing: 0.8px;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.35px;
+  line-height: 1.15;
 }
 
-.sgdbSettingsHeaderRow {
+.sgdbSettingsIntro p,
+.sgdbSettingsCardHeader p {
+  margin: 0;
+  color: var(--sgdb-text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.sgdbSettingsEyebrow {
+  color: var(--accent-col, #1a9fff);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1.35px;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.sgdbSettingsLayout {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.sgdbSettingsCard {
+  padding: 13px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 10px;
+  background: rgba(var(--dark-20, 16, 24, 32), 0.72);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.16);
+  box-sizing: border-box;
+}
+
+.sgdbSettingsCardHeader {
   display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.sgdbSettingsCardHeader > div {
+  min-width: 0;
+}
+
+.sgdbSettingsCardHeader h2 {
+  margin: 5px 0 5px;
+  color: var(--sgdb-text-strong);
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: -0.15px;
+  line-height: 1.2;
+}
+
+.sgdbSettingsOption {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 54px;
+  padding: 7px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.065);
+  box-sizing: border-box;
+  cursor: pointer;
+}
+
+.sgdbSettingsCardHeader + .sgdbSettingsOption {
+  margin-top: 9px;
+}
+
+.sgdbSettingsOptionCopy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sgdbSettingsOptionCopy strong {
+  color: var(--sgdb-text-strong);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.sgdbSettingsOptionCopy small {
+  color: var(--sgdb-text-muted);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.sgdbSettingsSwitch {
+  position: relative;
+  display: inline-flex;
+  width: 42px;
+  height: 24px;
+  flex: 0 0 auto;
+}
+
+.sgdbSettingsSwitch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sgdbSettingsSwitch > span {
+  position: absolute;
+  inset: 0;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: border-color 140ms ease, background 140ms ease;
+}
+
+.sgdbSettingsSwitch > span::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #d8dee5;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+  transition: transform 140ms ease, background 140ms ease;
+}
+
+.sgdbSettingsSwitch input:checked + span {
+  border-color: color-mix(in srgb, var(--accent-col, #1a9fff) 75%, white 10%);
+  background: var(--accent-col, #1a9fff);
+}
+
+.sgdbSettingsSwitch input:checked + span::after {
+  background: white;
+  transform: translateX(18px);
+}
+
+.sgdbSettingsSwitch input:focus-visible + span {
+  outline: 2px solid color-mix(in srgb, var(--accent-col, #1a9fff) 72%, white 18%);
+  outline-offset: 2px;
+}
+
+.sgdbSettingsNumberInput {
+  width: 64px;
+  height: 36px;
+  padding: 0 9px;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 6px;
+  color: var(--sgdb-text-strong);
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 14px;
+  font-weight: 700;
+  box-sizing: border-box;
+}
+
+.sgdbSettingsNumberInput:focus,
+.sgdbThemePresetSelect:focus,
+.sgdbApiKeyInput:focus {
+  border-color: var(--accent-col, #1a9fff);
+  outline: 1px solid var(--accent-col, #1a9fff);
+}
+
+.sgdbSettingsPrimaryButton,
+.sgdbSettingsResetButton {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  color: var(--sgdb-text-strong);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.sgdbSettingsPrimaryButton {
+  min-width: 88px;
+  height: 40px;
+  padding: 0 18px;
+  background: var(--accent-col, #1a9fff);
+}
+
+.sgdbSettingsResetButton {
+  flex: 0 0 auto;
+  height: 30px;
+  margin-top: 12px;
+  padding: 0 11px;
+  background: rgba(255, 255, 255, 0.055);
+  font-size: 11px;
+}
+
+.sgdbSettingsPrimaryButton:hover,
+.sgdbSettingsResetButton:hover {
+  filter: brightness(1.12);
+}
+
+.sgdbSettingsColorGrid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+.sgdbSettingsColorItem {
+  display: flex;
+  min-width: 0;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  margin: 0 0 8px;
-}
-
-.sgdbSettingsHeaderRow h2 {
-  margin-bottom: 0;
+  gap: 10px;
+  min-height: 44px;
+  padding: 7px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.065);
+  border-radius: 7px;
+  color: var(--sgdb-text-strong);
+  background: rgba(0, 0, 0, 0.13);
+  font-size: 12px;
+  font-weight: 650;
+  box-sizing: border-box;
+  cursor: pointer;
 }
 
 .sgdbSettingsResetButton {
@@ -1910,77 +2039,36 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   letter-spacing: 0.5px;
 }
 
-.sgdbSettingsToggleGrid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.sgdbSettingsPill {
-  width: auto;
-  min-width: 108px;
-  height: 34px;
-  padding: 0 18px;
-  font-size: 13px;
-  letter-spacing: 0.9px;
-}
-
-.sgdbSettingsRow {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: center;
-  gap: 20px;
-  min-height: 42px;
-  color: var(--sgdb-text);
-  font-size: 15px;
-  font-weight: 700;
-}
-
-.sgdbSettingsRow input[type="checkbox"] {
-  width: 22px;
-  height: 22px;
-}
-
-.sgdbSettingsRow input[type="number"] {
-  width: 72px;
-  height: 32px;
-  padding: 0 8px;
-  border: 1px solid var(--sgdb-border);
-  border-radius: 4px;
-  color: var(--sgdb-text-strong);
-  background: var(--sgdb-border-soft);
-  font-size: 15px;
-  font-weight: 700;
-}
-
-.sgdbSettingsHelp {
-  margin: -4px 0 12px;
-  color: var(--sgdb-text-muted);
-  font-size: 13px;
-  line-height: 1.45;
-}
-
 .sgdbApiKeyForm {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.sgdbApiKeyActions {
+  display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
+  align-items: center;
+  gap: 8px;
 }
 
 .sgdbApiKeyInput {
+  width: 100%;
   min-width: 0;
-  height: 36px;
-  padding: 0 12px;
-  border: 1px solid var(--sgdb-border);
-  border-radius: 5px;
+  height: 40px;
+  padding: 0 13px;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 6px;
   color: var(--sgdb-text-strong);
-  background: var(--sgdb-border-soft);
+  background: rgba(255, 255, 255, 0.08);
   font-family: monospace;
   font-size: 14px;
 }
 
 .sgdbApiKeyInput:focus {
-  border-color: var(--sgdb-slider-thumb);
-  outline: 1px solid var(--sgdb-slider-thumb);
+  border-color: var(--accent-col, #1a9fff);
+  outline: 1px solid var(--accent-col, #1a9fff);
 }
 
 .sgdbApiKeyForm button:disabled {
@@ -1989,11 +2077,15 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 }
 
 .sgdbApiKeyStatus {
-  min-height: 18px;
-  margin-top: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  margin: 0;
   color: var(--sgdb-text-muted);
   font-size: 12px;
   font-weight: 700;
+  text-align: center;
 }
 
 .sgdbApiKeyStatus.configured {
@@ -2001,40 +2093,50 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 }
 
 .sgdbThemePresetSelect {
-  min-width: 184px;
-  height: 34px;
+  min-width: 172px;
+  height: 38px;
   padding: 0 34px 0 12px;
-  border: 1px solid var(--sgdb-border);
-  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 6px;
   color: var(--sgdb-text-strong);
-  background: var(--sgdb-border-soft);
+  background: rgba(255, 255, 255, 0.08);
   font-size: 14px;
   font-weight: 700;
 }
 
-.sgdbSettingsColorRow {
-  min-height: 46px;
+.sgdbThemePresetSelect option {
+  color: var(--sgdb-text-strong);
+  background: rgb(var(--dark-20, 16, 24, 32));
+}
+
+.sgdbSettingsPresetRow {
+  grid-template-columns: 1fr;
+  gap: 7px;
+}
+
+.sgdbThemePresetSelect {
+  width: 100%;
 }
 
 .sgdbColorControl {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 7px;
 }
 
 .sgdbColorValue {
-  min-width: 74px;
+  min-width: 58px;
   color: var(--sgdb-text-muted);
   font-family: monospace;
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 700;
   text-align: right;
   text-transform: uppercase;
 }
 
 .sgdbColorControl input[type="color"] {
-  width: 42px;
-  height: 28px;
+  width: 36px;
+  height: 30px;
   padding: 0;
   border: 1px solid var(--sgdb-border);
   border-radius: 5px;
@@ -2049,6 +2151,113 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 .sgdbColorControl input[type="color"]::-webkit-color-swatch {
   border: 0;
   border-radius: 3px;
+}
+
+@media (max-width: 560px) {
+  .sgdbSettingsPage {
+    width: min(100% - 8px, 760px);
+    margin-top: 10px;
+  }
+
+  .sgdbSettingsIntro h1 {
+    font-size: 23px;
+  }
+
+  .sgdbSettingsCard {
+    padding: 12px;
+  }
+
+  .sgdbSettingsPrimaryButton {
+    width: auto;
+  }
+
+}
+
+@media (max-width: 410px) {
+  .sgdbSettingsColorGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .sgdbSettingsCardHeader {
+    gap: 12px;
+  }
+
+  .sgdbSettingsOption {
+    gap: 12px;
+  }
+}
+
+/* Settings use Steam's native PanelSection, field, toggle, dropdown, and button components. */
+.sgdbSettingsPage {
+  width: auto;
+  margin: 8px 0 28px;
+  padding: 0;
+  color: inherit;
+}
+
+.sgdbSettingsPage > * {
+  width: auto !important;
+  margin-right: 0 !important;
+  margin-left: 0 !important;
+  padding-right: 0 !important;
+  padding-left: 0 !important;
+  box-sizing: border-box;
+}
+
+.sgdbNativeApiForm {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+  box-sizing: border-box;
+}
+
+.sgdbNativeApiForm input {
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.sgdbNativeApiActions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.sgdbNativeApiActions .sgdbApiKeyStatus {
+  min-height: 0;
+  margin: 0;
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.sgdbNativeApiActions button {
+  width: auto !important;
+  min-width: 88px;
+  height: 36px;
+  padding: 0 14px;
+}
+
+.sgdbNativeColorRow {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: inherit;
+  box-sizing: border-box;
+  cursor: pointer;
+}
+
+.sgdbNativeColorRow .sgdbColorValue {
+  color: rgba(255, 255, 255, 0.56);
+}
+
+.sgdbNativeColorRow input[type="color"] {
+  background: transparent;
 }
 
 .tabcontents-wrap {
@@ -2508,8 +2717,8 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 }
 
 .sgdbBigPicture .sgdbResultsState {
-  position: fixed;
-  top: calc(var(--basicui-header-height, 40px) + 18px);
+  position: absolute;
+  top: 18px;
   left: 52px;
   z-index: 20;
   display: flex;
@@ -2700,8 +2909,8 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 }
 
 .sgdbCollectionAddIcon {
-  width: clamp(18px, 10cqw, 25px);
-  height: clamp(18px, 10cqw, 25px);
+  width: 62%;
+  height: 62%;
   display: block;
   fill: none;
   stroke: currentColor;
