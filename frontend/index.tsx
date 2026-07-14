@@ -793,6 +793,25 @@ const SettingsView = ({
   );
 };
 
+const MissingApiKeyView = ({ onRetry }: { onRetry: () => void }) => (
+  <div className="sgdbApiKeyFallback" role="alert">
+    <div className="sgdbApiKeyFallbackCard">
+      <div className="sgdbApiKeyFallbackEyebrow">Required setup</div>
+      <h1>Add your SteamGridDB API key</h1>
+      <p>SteamGridDB cannot load artwork until a personal API key is configured.</p>
+      <ol>
+        <li>Select <strong>Get API key</strong>, sign in to SteamGridDB, and copy your key.</li>
+        <li>In Steam, open <strong>Settings → Millennium → Plugins → SteamGridDB</strong>.</li>
+        <li>Paste it into <strong>SteamGridDB API key</strong>, select <strong>Save Key</strong>, then return here.</li>
+      </ol>
+      <div className="sgdbApiKeyFallbackActions">
+        <DialogButton onClick={() => void openExternalUrl({ url: 'https://www.steamgriddb.com/profile/preferences/api' })}>Get API key</DialogButton>
+        <DialogButton onClick={onRetry}>Retry</DialogButton>
+      </div>
+    </div>
+  </div>
+);
+
 const SteamGridDBContent = ({
   initialAppId,
   initialAssetType,
@@ -816,6 +835,7 @@ const SteamGridDBContent = ({
   const [zoomByMode, setZoomByMode] = useState<ZoomModeState>(() => loadZoomByMode());
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [applyingId, setApplyingId] = useState<number | null>(null);
+  const [apiKeyRequired, setApiKeyRequired] = useState(false);
   const [uiMode, setUiMode] = useState<EUIMode>(EUIMode.Desktop);
   const [sgdbGameId, setSgdbGameId] = useState<number | null>(null);
   const appId = useMemo(() => Number.parseInt(appIdText, 10), [appIdText]);
@@ -912,6 +932,7 @@ const SteamGridDBContent = ({
 
   const loadAssets = useCallback(async (type: SGDBAssetType, nextPage = 0, append = false) => {
     if (!Number.isFinite(appId) || loadingByType[type] || endReachedByType[type]) return;
+    if (!append) setApiKeyRequired(false);
     setLoadingByType((current) => ({ ...current, [type]: true }));
     try {
       const endpoint = ASSET_ENDPOINT[type];
@@ -954,7 +975,12 @@ const SteamGridDBContent = ({
       setEndReachedByType((current) => ({ ...current, [type]: reachedEnd }));
     } catch (err) {
       setEndReachedByType((current) => ({ ...current, [type]: true }));
-      notice('SteamGridDB Assets Failed', err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      if (/api key is required/i.test(message)) {
+        setApiKeyRequired(true);
+      } else {
+        notice('SteamGridDB Assets Failed', message);
+      }
     } finally {
       setLoadingByType((current) => ({ ...current, [type]: false }));
     }
@@ -974,6 +1000,13 @@ const SteamGridDBContent = ({
   }, [appId, assetType, assetsByType, endReachedByType, isGamepadUI, loadAssets, loadingByType, pagesByType, settings.preloadPages]);
 
   const resetCurrentTab = useCallback(() => {
+    setAssetsByType((current) => ({ ...current, [assetType]: [] }));
+    setPagesByType((current) => ({ ...current, [assetType]: 0 }));
+    setEndReachedByType((current) => ({ ...current, [assetType]: false }));
+  }, [assetType]);
+
+  const retryAfterApiKey = useCallback(() => {
+    setApiKeyRequired(false);
     setAssetsByType((current) => ({ ...current, [assetType]: [] }));
     setPagesByType((current) => ({ ...current, [assetType]: 0 }));
     setEndReachedByType((current) => ({ ...current, [assetType]: false }));
@@ -1148,7 +1181,11 @@ const SteamGridDBContent = ({
   return (
     <div className={`sgdbRoot sgdbGamepad ${isGamepadUI ? 'sgdbBigPicture' : 'sgdbDesktopToolbar'} ${settings.spaceThemeCompatibility ? 'sgdbSpaceThemeCompat' : ''} ${popout ? 'sgdbPopoutContent' : ''} ${hasAppId ? '' : 'sgdbSettingsRoot'}`} id="sgdb-wrap" style={rootStyle}>
       <style>{styles}</style>
-      {hasAppId ? <GamepadView {...viewProps} /> : <SettingsView settings={settings} setSettings={setSettings} />}
+      {hasAppId
+        ? apiKeyRequired
+          ? <MissingApiKeyView onRetry={retryAfterApiKey} />
+          : <GamepadView {...viewProps} />
+        : <SettingsView settings={settings} setSettings={setSettings} />}
     </div>
   );
 };
@@ -1156,6 +1193,86 @@ const SteamGridDBContent = ({
 const SteamGridDBRoute = () => {
   const { appid, assetType } = useParams<{ appid: string; assetType?: SGDBAssetType }>();
   return <SteamGridDBContent initialAppId={appid} initialAssetType={assetType} allowAppIdFallback />;
+};
+
+let steamDesktopOwnerWindow: Window | null = null;
+
+const captureSteamDesktopWindow = (popup: any) => {
+  if (popup?.m_strName !== 'SP Desktop_uid0') {
+    return;
+  }
+
+  const ownerWindow = popup?.m_popup?.window ?? popup?.m_popup;
+  if (ownerWindow?.document) {
+    steamDesktopOwnerWindow = ownerWindow as Window;
+  }
+};
+
+Millennium?.AddWindowCreateHook?.(captureSteamDesktopWindow);
+
+const installResizablePopupPatch = () => {
+  window.__SGDB_POPUP_CREATE_PATCH__?.unpatch?.();
+
+  const popupManagerConstructor = (globalThis as any).g_PopupManager?.constructor;
+  const originalCreatePopup = popupManagerConstructor?.CreatePopup;
+  if (typeof originalCreatePopup !== 'function') {
+    console.warn('[SteamGridDB] Steam popup manager was not available; desktop popouts will not be resizable');
+    return { unpatch: () => undefined };
+  }
+
+  const restoreDetailsKey = 'SteamGridDBDesktopPopout';
+  const popupManager = (globalThis as any).g_PopupManager;
+
+  const trackPopupGeometry = (popup: any) => {
+    if (!popup?.SteamClient?.Window?.GetWindowRestoreDetails || !popupManager?.SetRestoreDetails) {
+      return;
+    }
+
+    let saveTimer: number | undefined;
+    const saveGeometry = () => {
+      popup.SteamClient.Window.GetWindowRestoreDetails()
+        .then((details: string) => {
+          if (details) popupManager.SetRestoreDetails(restoreDetailsKey, details, false);
+        })
+        .catch(() => undefined);
+    };
+    const scheduleSave = () => {
+      if (saveTimer !== undefined) popup.clearTimeout(saveTimer);
+      saveTimer = popup.setTimeout(saveGeometry, 150);
+    };
+
+    popup.addEventListener('resize', scheduleSave);
+    popup.addEventListener('message', (event: MessageEvent) => {
+      if (event.data === 'window_moved' || event.data === 'window_resized') scheduleSave();
+    });
+    popup.addEventListener('beforeunload', saveGeometry);
+  };
+
+  const wrappedCreatePopup = function (this: any, name: string, params: any) {
+    if (name !== 'SteamGridDB') {
+      return Reflect.apply(originalCreatePopup, this, [name, params]);
+    }
+
+    const savedRestoreDetails = popupManager?.GetRestoreDetails?.(restoreDetailsKey) || undefined;
+    const nextParams = {
+      ...params,
+      eCreationFlags: (params?.eCreationFlags ?? 0) | 16,
+      strRestoreDetails: params?.strRestoreDetails ?? savedRestoreDetails,
+      center_on_window: savedRestoreDetails ? undefined : params?.center_on_window,
+    };
+    const result = Reflect.apply(originalCreatePopup, this, [name, nextParams]) as any;
+    trackPopupGeometry(result?.popup);
+    return result;
+  };
+
+  popupManagerConstructor.CreatePopup = wrappedCreatePopup;
+  return {
+    unpatch: () => {
+      if (popupManagerConstructor.CreatePopup === wrappedCreatePopup) {
+        popupManagerConstructor.CreatePopup = originalCreatePopup;
+      }
+    },
+  };
 };
 
 function openSteamGridDB() {
@@ -1174,7 +1291,8 @@ const openSteamGridDBForApp = async (appid: number) => {
     return;
   }
 
-  showModal(<SteamGridDBContent initialAppId={String(appid)} popout allowAppIdFallback />, window, {
+  const popupParent = steamDesktopOwnerWindow ?? window;
+  showModal(<SteamGridDBContent initialAppId={String(appid)} popout allowAppIdFallback />, popupParent, {
     strTitle: 'SteamGridDB',
     bHideMainWindowForPopouts: false,
     bForcePopOut: true,
@@ -1314,6 +1432,8 @@ export default definePlugin(() => ({
   content: <SteamGridDBContent />,
   onDismount() {
     routerHook.removeRoute('/steamgriddb/:appid/:assetType?');
+    window.__SGDB_POPUP_CREATE_PATCH__?.unpatch?.();
+    delete window.__SGDB_POPUP_CREATE_PATCH__;
     window.__SGDB_CONTEXT_MENU_PATCH__?.unpatch?.();
     delete window.__SGDB_CONTEXT_MENU_PATCH__;
   },
@@ -1322,11 +1442,13 @@ export default definePlugin(() => ({
 declare global {
   interface Window {
     __SGDB_CONTEXT_MENU_PATCH__?: { unpatch?: () => void };
+    __SGDB_POPUP_CREATE_PATCH__?: { unpatch?: () => void };
   }
 }
 
 routerHook.removeRoute('/steamgriddb/:appid/:assetType?');
 routerHook.addRoute('/steamgriddb/:appid/:assetType?', SteamGridDBRoute, { exact: true });
+window.__SGDB_POPUP_CREATE_PATCH__ = installResizablePopupPatch();
 window.__SGDB_CONTEXT_MENU_PATCH__?.unpatch?.();
 window.__SGDB_CONTEXT_MENU_PATCH__ = patchLibraryContextMenu();
 
@@ -1787,6 +1909,75 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   color: var(--sgdb-text);
   background: var(--sgdb-surface-hover);
   box-shadow: none;
+}
+
+.sgdbApiKeyFallback {
+  flex: 1 1 auto;
+  display: grid;
+  place-items: center;
+  min-height: 0;
+  padding: 36px;
+  box-sizing: border-box;
+}
+
+.sgdbApiKeyFallbackCard {
+  width: min(680px, 100%);
+  padding: 30px 32px;
+  border: 1px solid var(--sgdb-border-soft);
+  border-radius: 12px;
+  color: var(--sgdb-text);
+  background: color-mix(in srgb, var(--sgdb-surface-hover) 78%, var(--sgdb-bg));
+  box-shadow: 0 22px 54px rgba(0, 0, 0, 0.34);
+  box-sizing: border-box;
+}
+
+.sgdbApiKeyFallbackEyebrow {
+  margin-bottom: 10px;
+  color: var(--sgdb-accent);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1.25px;
+  text-transform: uppercase;
+}
+
+.sgdbApiKeyFallbackCard h1 {
+  margin: 0 0 10px;
+  color: var(--sgdb-text-strong);
+  font-size: clamp(24px, 3vw, 32px);
+  line-height: 1.15;
+}
+
+.sgdbApiKeyFallbackCard p,
+.sgdbApiKeyFallbackCard li {
+  color: var(--sgdb-text-muted);
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.sgdbApiKeyFallbackCard p {
+  margin: 0;
+}
+
+.sgdbApiKeyFallbackCard ol {
+  display: grid;
+  gap: 8px;
+  margin: 20px 0 24px;
+  padding-left: 24px;
+}
+
+.sgdbApiKeyFallbackCard strong {
+  color: var(--sgdb-text);
+}
+
+.sgdbApiKeyFallbackActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.sgdbApiKeyFallbackActions button {
+  width: auto;
+  min-width: 120px;
 }
 
 .sgdbSettingsPage {
