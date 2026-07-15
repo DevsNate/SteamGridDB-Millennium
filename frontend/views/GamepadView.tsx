@@ -1,6 +1,6 @@
-import { DialogButton, Focusable, GamepadButton, SliderField, Spinner } from '@steambrew/client';
+import { DialogButton, Dropdown, Focusable, GamepadButton, Spinner } from '@steambrew/client';
 import { Dispatch, SetStateAction, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { columnsToSliderValue, sliderRange, sliderValueToColumns } from '../layout';
+import { columnOptions } from '../layout';
 import type { AssetDensityState } from '../layout';
 import type { AssetState, EndState, ErrorState, FilterState, LoadingState, PageState, SGDBAsset, SGDBAssetType } from '../index';
 
@@ -29,6 +29,12 @@ type ViewProps = {
   resetCurrentTab: () => void;
   retryCurrentLoad: () => void;
   resetArtwork: (type: SGDBAssetType) => Promise<void>;
+  originalAppIdText: string;
+  lookupAppIdText: string;
+  lookupAppIdDraft: string;
+  setLookupAppIdDraft: Dispatch<SetStateAction<string>>;
+  confirmLookupAppId: () => void;
+  resetLookupAppId: () => void;
   isGamepadUI?: boolean;
 };
 
@@ -49,6 +55,32 @@ const VIEW_LABEL: Record<ViewTab, string> = {
 type FocusZone = 'tabs' | 'content';
 const isAnimatedAsset = (src: string) => /\.(webm|mp4)(\?|$)/i.test(src);
 const DEFAULT_VISIBLE_ROWS = 7;
+const MIN_VERTICAL_ROW_GAP = 12;
+const MAX_VERTICAL_ROW_GAP = 44;
+const VERTICAL_FIT_EDGE_INSET = 4;
+
+type VerticalFit = {
+  rowGap: number;
+  paddingTop: number;
+  rows: number;
+  exact: boolean;
+};
+
+const emptyVerticalFits = (): Record<SGDBAssetType, VerticalFit | null> => ({
+  grid_p: null,
+  grid_l: null,
+  hero: null,
+  logo: null,
+  icon: null,
+});
+
+const emptyScrollTops = (): Record<SGDBAssetType, number> => ({
+  grid_p: 0,
+  grid_l: 0,
+  hero: 0,
+  logo: 0,
+  icon: 0,
+});
 
 const AssetPreview = ({ asset, assetType }: { asset: SGDBAsset; assetType: SGDBAssetType }) => {
   const [sourceIndex, setSourceIndex] = useState(0);
@@ -90,6 +122,19 @@ const AddToCollectionIcon = () => (
   </svg>
 );
 
+const ResetIdIcon = () => (
+  <svg className="sgdbToolbarIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M4 4v6h6" />
+    <path d="M5.6 15.5A7.5 7.5 0 1 0 6 7.8L4 10" />
+  </svg>
+);
+
+const ConfirmIdIcon = () => (
+  <svg className="sgdbToolbarIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="m5 12 4.2 4.2L19 6.5" />
+  </svg>
+);
+
 export const GamepadView = ({
   assetType,
   setAssetType,
@@ -115,10 +160,19 @@ export const GamepadView = ({
   resetCurrentTab,
   retryCurrentLoad,
   resetArtwork,
+  originalAppIdText,
+  lookupAppIdText,
+  lookupAppIdDraft,
+  setLookupAppIdDraft,
+  confirmLookupAppId,
+  resetLookupAppId,
   isGamepadUI = true,
 }: ViewProps) => {
-  const gridRef = useRef<HTMLDivElement | null>(null);
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
   const activeTabRef = useRef<ViewTab>(assetType);
+  const previousAssetTypeRef = useRef<SGDBAssetType>(assetType);
+  const scrollTopByTypeRef = useRef<Record<SGDBAssetType, number>>(emptyScrollTops());
+  const pendingTabScrollRestoreRef = useRef<SGDBAssetType | null>(null);
   const internalTabChangeRef = useRef(false);
   const lastBumperAtRef = useRef(0);
   const pendingArtworkFocusRef = useRef(true);
@@ -126,10 +180,13 @@ export const GamepadView = ({
   const lastFocusedAssetIdRef = useRef<number | null>(null);
   const restoreAssetFocusIdRef = useRef<number | null>(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
+  const tabsRef = useRef<HTMLDivElement | null>(null);
   const autoLoadPendingRef = useRef(false);
+  const verticalFitFrameRef = useRef<number | null>(null);
   const [activeTab, setActiveTab] = useState<ViewTab>(assetType);
   const [focusZone, setFocusZone] = useState<FocusZone>('content');
   const [autoLoadReadyType, setAutoLoadReadyType] = useState<SGDBAssetType | null>(null);
+  const [verticalFitByType, setVerticalFitByType] = useState<Record<SGDBAssetType, VerticalFit | null>>(() => emptyVerticalFits());
   const [visibleRowsByType, setVisibleRowsByType] = useState<Record<SGDBAssetType, number>>({
     grid_p: DEFAULT_VISIBLE_ROWS,
     grid_l: DEFAULT_VISIBLE_ROWS,
@@ -141,11 +198,19 @@ export const GamepadView = ({
   const tabLoading = loadingByType[assetType];
   const tabEndReached = endReachedByType[assetType];
   const tabError = loadErrorByType[assetType];
-  const slider = sliderRange(assetType);
   const columnCount = densityByType[assetType];
-  const currentSliderValue = columnsToSliderValue(assetType, columnCount);
-  const tabGridStyle = { ['--asset-columns' as string]: columnCount };
-  const sliderProgress = ((currentSliderValue - slider.min) / (slider.max - slider.min)) * 100;
+  const columns = useMemo(() => columnOptions(assetType).map((value) => ({
+    data: value,
+    label: `${value} columns`,
+  })), [assetType]);
+  const verticalFit = verticalFitByType[assetType];
+  const tabGridStyle = {
+    ['--asset-columns' as string]: columnCount,
+    ...(verticalFit ? {
+      ['--sgdb-grid-row-gap' as string]: `${verticalFit.rowGap}px`,
+      ['--sgdb-grid-padding-top' as string]: `${verticalFit.paddingTop}px`,
+    } : {}),
+  };
   const rawVisibleLimit = visibleRowsByType[assetType] * columnCount;
   const rawVisibleCount = Math.min(tabAssets.length, rawVisibleLimit);
   const hasMoreAfterRawVisible = tabAssets.length > rawVisibleCount || !tabEndReached;
@@ -155,7 +220,20 @@ export const GamepadView = ({
   const visibleAssets = tabAssets.slice(0, visibleCount);
   const hasHiddenLoadedAssets = tabAssets.length > visibleAssets.length;
   const canShowMore = !tabError && tabAssets.length > 0 && (hasHiddenLoadedAssets || !tabEndReached);
+  const getGridElement = useCallback(
+    () => scrollerRef.current?.querySelector<HTMLElement>('.sgdbGrid') ?? null,
+    [],
+  );
   const selectTab = useCallback((tab: ViewTab) => {
+    if (tab === activeTabRef.current) {
+      return;
+    }
+
+    const scroller = scrollerRef.current;
+    if (scroller) {
+      scrollTopByTypeRef.current[activeTabRef.current] = scroller.scrollTop;
+    }
+    pendingTabScrollRestoreRef.current = tab;
     activeTabRef.current = tab;
     setActiveTab(tab);
     internalTabChangeRef.current = true;
@@ -228,7 +306,7 @@ export const GamepadView = ({
     const restoreFocus = () => {
       attempts += 1;
       clearTabFocusArtifacts();
-      const target = gridRef.current?.querySelector<HTMLElement>('.image-wrap.sgdbAsset');
+      const target = getGridElement()?.querySelector<HTMLElement>('.image-wrap.sgdbAsset');
 
       if (!target) {
         if (attempts < 8) {
@@ -252,7 +330,7 @@ export const GamepadView = ({
         window.requestAnimationFrame(() => window.requestAnimationFrame(restoreFocus));
       }, delay);
     });
-  }, [clearTabFocusArtifacts, isGamepadUI]);
+  }, [clearTabFocusArtifacts, getGridElement, isGamepadUI]);
   const applyAssetAndRestoreFocus = useCallback(async (asset: SGDBAsset, type: SGDBAssetType) => {
     activeTabRef.current = type;
     pendingArtworkFocusRef.current = false;
@@ -274,7 +352,7 @@ export const GamepadView = ({
     }
 
     autoLoadPendingRef.current = true;
-    const scroller = gridRef.current?.closest<HTMLElement>('.tabcontents-wrap');
+    const scroller = scrollerRef.current;
     if (isGamepadUI) {
       preserveScrollTopRef.current = scroller?.scrollTop ?? null;
       const lastFocusedAssetId = lastFocusedAssetIdRef.current;
@@ -298,6 +376,100 @@ export const GamepadView = ({
     void resetArtwork(assetType);
   };
 
+  const updateVerticalFit = useCallback((nextFit: VerticalFit | null) => {
+    setVerticalFitByType((current) => {
+      const previous = current[assetType];
+      const unchanged = previous === nextFit || (
+        previous !== null
+        && nextFit !== null
+        && previous.rows === nextFit.rows
+        && previous.exact === nextFit.exact
+        && Math.abs(previous.rowGap - nextFit.rowGap) < 0.25
+        && Math.abs(previous.paddingTop - nextFit.paddingTop) < 0.25
+      );
+      return unchanged ? current : { ...current, [assetType]: nextFit };
+    });
+  }, [assetType]);
+
+  const measureVerticalFit = useCallback(() => {
+    const grid = getGridElement();
+    const scroller = scrollerRef.current;
+    if (!grid || !scroller || visibleAssets.length === 0) {
+      updateVerticalFit(null);
+      return;
+    }
+
+    const items = Array.from(grid.querySelectorAll<HTMLElement>(':scope > .asset-box-wrap'));
+    if (items.length === 0) {
+      updateVerticalFit(null);
+      return;
+    }
+
+    const rowGroups: { top: number; height: number }[] = [];
+    items.forEach((item) => {
+      const top = item.offsetTop;
+      const height = item.getBoundingClientRect().height;
+      const row = rowGroups.find((candidate) => Math.abs(candidate.top - top) <= 2);
+      if (row) {
+        row.height = Math.max(row.height, height);
+      } else {
+        rowGroups.push({ top, height });
+      }
+    });
+    rowGroups.sort((left, right) => left.top - right.top);
+
+    const scrollerRect = scroller.getBoundingClientRect();
+    const gridRect = grid.getBoundingClientRect();
+    const viewportHeight = Math.min(
+      scroller.clientHeight,
+      Math.max(0, window.innerHeight - Math.max(0, scrollerRect.top)),
+    );
+    const gridTopAtRest = gridRect.top - scrollerRect.top + scroller.scrollTop;
+    const availableHeight = viewportHeight - gridTopAtRest - VERTICAL_FIT_EDGE_INSET;
+
+    if (!Number.isFinite(availableHeight) || availableHeight <= 0) {
+      updateVerticalFit(null);
+      return;
+    }
+
+    let fittedRows = 0;
+    let fittedArtworkHeight = 0;
+    for (const row of rowGroups) {
+      const nextRows = fittedRows + 1;
+      const nextArtworkHeight = fittedArtworkHeight + row.height;
+      if (nextArtworkHeight + (nextRows * MIN_VERTICAL_ROW_GAP) > availableHeight) {
+        break;
+      }
+      fittedRows = nextRows;
+      fittedArtworkHeight = nextArtworkHeight;
+    }
+
+    const hasFollowingRow = fittedRows < rowGroups.length || canShowMore;
+    if (fittedRows === 0 || !hasFollowingRow) {
+      updateVerticalFit(null);
+      return;
+    }
+
+    const idealGap = (availableHeight - fittedArtworkHeight) / fittedRows;
+    const rowGap = Math.max(MIN_VERTICAL_ROW_GAP, Math.min(MAX_VERTICAL_ROW_GAP, idealGap));
+    updateVerticalFit({
+      rowGap,
+      paddingTop: rowGap / 2,
+      rows: fittedRows,
+      exact: idealGap <= MAX_VERTICAL_ROW_GAP,
+    });
+  }, [canShowMore, getGridElement, updateVerticalFit, visibleAssets.length]);
+
+  const scheduleVerticalFit = useCallback(() => {
+    if (verticalFitFrameRef.current !== null) {
+      window.cancelAnimationFrame(verticalFitFrameRef.current);
+    }
+    verticalFitFrameRef.current = window.requestAnimationFrame(() => {
+      verticalFitFrameRef.current = null;
+      measureVerticalFit();
+    });
+  }, [measureVerticalFit]);
+
   useEffect(() => {
     setVisibleRowsByType({
       grid_p: DEFAULT_VISIBLE_ROWS,
@@ -307,6 +479,116 @@ export const GamepadView = ({
       icon: DEFAULT_VISIBLE_ROWS,
     });
   }, [filters]);
+
+  useLayoutEffect(() => {
+    scrollTopByTypeRef.current = emptyScrollTops();
+    pendingTabScrollRestoreRef.current = activeTabRef.current;
+  }, [filters]);
+
+  useLayoutEffect(() => {
+    const tabsElement = tabsRef.current;
+    const scroller = scrollerRef.current;
+    if (!tabsElement || !scroller) {
+      return undefined;
+    }
+
+    let frame: number | null = null;
+    let disposed = false;
+    const updateToolbarGeometry = () => {
+      if (frame !== null) {
+        window.cancelAnimationFrame(frame);
+      }
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        const width = Math.ceil(tabsElement.getBoundingClientRect().width);
+        if (width > 0) {
+          scroller.style.setProperty('--sgdb-tab-island-width', `${width}px`);
+        }
+
+        const toolbarElement = toolbarRef.current;
+        const closeElement = document.querySelector<HTMLElement>(
+          'button[aria-label="Close"], button[title="Close"], [class*="CloseButton"], [class*="closeButton"]',
+        );
+        if (toolbarElement && closeElement) {
+          const toolbarRect = toolbarElement.getBoundingClientRect();
+          const closeRect = closeElement.getBoundingClientRect();
+          const toolbarRightPadding = Number.parseFloat(window.getComputedStyle(toolbarElement).paddingRight) || 0;
+          const toolbarContentRight = toolbarRect.right - toolbarRightPadding;
+          const closeSafePadding = Math.max(0, Math.ceil(toolbarContentRight - closeRect.left));
+          scroller.style.setProperty('--sgdb-close-safe-padding', `${closeSafePadding}px`);
+        } else {
+          scroller.style.setProperty('--sgdb-close-safe-padding', '0px');
+        }
+      });
+    };
+
+    updateToolbarGeometry();
+    document.fonts?.ready.then(() => {
+      if (!disposed) updateToolbarGeometry();
+    });
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(updateToolbarGeometry);
+    observer?.observe(tabsElement);
+    if (toolbarRef.current) observer?.observe(toolbarRef.current);
+    window.addEventListener('resize', updateToolbarGeometry);
+
+    return () => {
+      disposed = true;
+      observer?.disconnect();
+      window.removeEventListener('resize', updateToolbarGeometry);
+      if (frame !== null) {
+        window.cancelAnimationFrame(frame);
+      }
+      scroller.style.removeProperty('--sgdb-tab-island-width');
+      scroller.style.removeProperty('--sgdb-close-safe-padding');
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller) {
+      return;
+    }
+
+    const previousType = previousAssetTypeRef.current;
+    if (previousType !== assetType && pendingTabScrollRestoreRef.current !== assetType) {
+      scrollTopByTypeRef.current[previousType] = scroller.scrollTop;
+      pendingTabScrollRestoreRef.current = assetType;
+    }
+    previousAssetTypeRef.current = assetType;
+
+    if (pendingTabScrollRestoreRef.current !== assetType) {
+      return;
+    }
+
+    pendingTabScrollRestoreRef.current = null;
+    const restoreTop = scrollTopByTypeRef.current[assetType];
+    scroller.scrollTop = restoreTop;
+    window.requestAnimationFrame(() => {
+      if (previousAssetTypeRef.current === assetType) {
+        scroller.scrollTop = restoreTop;
+      }
+    });
+  }, [assetType, tabLoading, visibleAssets.length]);
+
+  useEffect(() => {
+    const grid = getGridElement();
+    const scroller = scrollerRef.current;
+    scheduleVerticalFit();
+
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(scheduleVerticalFit);
+    if (grid) observer?.observe(grid);
+    if (scroller) observer?.observe(scroller);
+    window.addEventListener('resize', scheduleVerticalFit);
+
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', scheduleVerticalFit);
+      if (verticalFitFrameRef.current !== null) {
+        window.cancelAnimationFrame(verticalFitFrameRef.current);
+        verticalFitFrameRef.current = null;
+      }
+    };
+  }, [assetType, columnCount, filtersOpen, getGridElement, scheduleVerticalFit, showCreatorNames, visibleAssets.length]);
 
   useEffect(() => {
     activeTabRef.current = activeTab;
@@ -334,7 +616,7 @@ export const GamepadView = ({
     const focusFirstAsset = () => {
       attempts += 1;
       clearTabFocusArtifacts();
-      const target = gridRef.current?.querySelector<HTMLElement>('.image-wrap.sgdbAsset');
+      const target = getGridElement()?.querySelector<HTMLElement>('.image-wrap.sgdbAsset');
       if (!target) {
         if (attempts < 8) {
           window.setTimeout(focusFirstAsset, 50);
@@ -358,7 +640,7 @@ export const GamepadView = ({
     };
 
     window.requestAnimationFrame(() => window.requestAnimationFrame(focusFirstAsset));
-  }, [assetType, clearTabFocusArtifacts, isGamepadUI, tabLoading, visibleAssets.length]);
+  }, [assetType, clearTabFocusArtifacts, getGridElement, isGamepadUI, tabLoading, visibleAssets.length]);
 
   useEffect(() => {
     autoLoadPendingRef.current = false;
@@ -371,7 +653,7 @@ export const GamepadView = ({
   }, [assetType, isGamepadUI]);
 
   useEffect(() => {
-    const scroller = gridRef.current?.closest<HTMLElement>('.tabcontents-wrap');
+    const scroller = scrollerRef.current;
     if (!scroller || autoLoadReadyType !== assetType || !canShowMore) {
       return undefined;
     }
@@ -397,7 +679,7 @@ export const GamepadView = ({
     preserveScrollTopRef.current = null;
     const restoreAssetId = restoreAssetFocusIdRef.current;
     restoreAssetFocusIdRef.current = null;
-    const scroller = gridRef.current?.closest<HTMLElement>('.tabcontents-wrap');
+    const scroller = scrollerRef.current;
     if (scroller && scrollTop !== null) {
       scroller.scrollTop = scrollTop;
       window.requestAnimationFrame(() => {
@@ -407,21 +689,87 @@ export const GamepadView = ({
 
     if (restoreAssetId !== null) {
       window.requestAnimationFrame(() => {
-        const target = gridRef.current?.querySelector<HTMLElement>(`[data-sgdb-asset-id="${restoreAssetId}"]`);
+        const target = getGridElement()?.querySelector<HTMLElement>(`[data-sgdb-asset-id="${restoreAssetId}"]`);
         target?.focus();
       });
     }
-  }, [tabLoading, visibleAssets.length]);
+  }, [getGridElement, tabLoading, visibleAssets.length]);
+
+  const normalizedLookupDraft = /^\d+$/.test(lookupAppIdDraft.trim())
+    && Number.parseInt(lookupAppIdDraft, 10) > 0
+    ? String(Number.parseInt(lookupAppIdDraft, 10))
+    : null;
+  const canConfirmLookupAppId = normalizedLookupDraft !== null && normalizedLookupDraft !== lookupAppIdText;
+  const canResetLookupAppId = lookupAppIdText !== originalAppIdText || lookupAppIdDraft !== originalAppIdText;
+  const resultsControl = (
+    <div className="sgdbResultsState" aria-live="polite">
+      {tabLoading ? 'Loading' : `${tabAssets.length} ${ASSET_LABEL[assetType].toLowerCase()} results`}
+    </div>
+  );
+  const columnsControl = (
+    <div className="sgdbColumnsControl" onFocusCapture={revealToolbar} onMouseEnter={() => setFocusZone('content')}>
+      <div className="sgdbColumnsDropdown">
+        <Dropdown
+          rgOptions={columns}
+          selectedOption={columnCount}
+          strDefaultLabel={`${columnCount} columns`}
+          menuLabel={`${ASSET_LABEL[assetType]} columns`}
+          focusable
+          onMenuOpened={revealToolbar}
+          onChange={(option) => {
+            const nextColumns = Number(option.data);
+            if (!Number.isFinite(nextColumns)) return;
+            setDensityByType((current) => ({ ...current, [assetType]: nextColumns }));
+          }}
+        />
+      </div>
+    </div>
+  );
+  const appIdControls = (
+    <div className="sgdbAppIdControls">
+      <input
+        className="sgdbAppIdInput"
+        type="text"
+        inputMode="numeric"
+        pattern="[0-9]*"
+        aria-label="SteamGridDB lookup App ID"
+        value={lookupAppIdDraft}
+        onChange={(event) => setLookupAppIdDraft(event.currentTarget.value.replace(/\D/g, ''))}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            confirmLookupAppId();
+          } else if (event.key === 'Escape') {
+            setLookupAppIdDraft(lookupAppIdText);
+          }
+        }}
+      />
+      <button
+        className="sgdbAppIdAction sgdbTextPill"
+        type="button"
+        aria-label="Reset lookup App ID"
+        title="Reset lookup App ID"
+        disabled={!canResetLookupAppId}
+        onClick={resetLookupAppId}
+      >
+        <ResetIdIcon />
+      </button>
+      <button
+        className="sgdbAppIdAction sgdbTextPill"
+        type="button"
+        aria-label="Confirm lookup App ID"
+        title="Confirm lookup App ID"
+        disabled={!canConfirmLookupAppId}
+        onClick={confirmLookupAppId}
+      >
+        <ConfirmIdIcon />
+      </button>
+    </div>
+  );
 
   return (
     <>
-      {isGamepadUI ? (
-        <div className="sgdbResultsState" aria-live="polite">
-          {tabLoading ? 'Loading' : `${tabAssets.length} ${ASSET_LABEL[assetType].toLowerCase()} results`}
-        </div>
-      ) : null}
-
-      <div className="sgdbManualTabs sgdbGamepadTabs">
+      <div ref={tabsRef} className="sgdbManualTabs sgdbGamepadTabs">
         {viewTabs.map((tab) => (
           <button
             key={tab}
@@ -442,80 +790,60 @@ export const GamepadView = ({
         ))}
       </div>
 
-      <div className="tabcontents-wrap">
-        {!isGamepadUI ? (
-          <div className="sgdbResultsState" aria-live="polite">
-            {tabLoading ? 'Loading' : `${tabAssets.length} ${ASSET_LABEL[assetType].toLowerCase()} results`}
-          </div>
-        ) : null}
-
+      <div ref={scrollerRef} className="tabcontents-wrap">
         <div className={`spinnyboi ${!tabLoading || tabAssets.length > 0 ? 'loaded' : ''}`}>
           <img alt="Loading..." src="/images/steam_spinner.png" />
         </div>
 
         <>
         {isGamepadUI ? (
-          <Focusable ref={toolbarRef} className="sgdb-asset-toolbar" flow-children="row" onGamepadFocus={revealToolbar} onMouseEnter={() => setFocusZone('content')} onButtonDown={handleTabBumper}>
-            <Focusable className="filter-buttons" flow-children="row">
+          <Focusable ref={toolbarRef} className="sgdb-asset-toolbar sgdbTopToolbar" flow-children="row" onGamepadFocus={revealToolbar} onMouseEnter={() => setFocusZone('content')} onButtonDown={handleTabBumper}>
+            <div className="sgdbToolbarLeft">
+              {resultsControl}
+              <Focusable className="filter-buttons" flow-children="row">
+                <Focusable
+                  className={`sgdbFilterMainButton sgdbTextPill ${filtersOpen ? 'selected' : ''}`}
+                  onActivate={() => setFiltersOpen((open) => !open)}
+                  onClick={() => setFiltersOpen((open) => !open)}
+                  onGamepadFocus={revealToolbar}
+                  onOKActionDescription="Filter"
+                  role="button"
+                >
+                  Filter
+                </Focusable>
+              </Focusable>
+              {columnsControl}
+            </div>
+            <div className="sgdbToolbarCenterGap" aria-hidden="true" />
+            <div className="sgdbToolbarRight">
+              {appIdControls}
               <Focusable
-                className={`sgdbFilterMainButton sgdbTextPill ${filtersOpen ? 'selected' : ''}`}
-                onActivate={() => setFiltersOpen((open) => !open)}
-                onClick={() => setFiltersOpen((open) => !open)}
+                className="sgdbResetButton sgdbTextPill"
+                onActivate={resetCurrentArtwork}
+                onClick={resetCurrentArtwork}
                 onGamepadFocus={revealToolbar}
-                onOKActionDescription="Filter"
                 role="button"
               >
-                Filter
+                Reset Artwork
               </Focusable>
-            </Focusable>
-            <div className="sgdbDensityControl">
-              <div className="sgdbSliderWithMarks" onFocusCapture={revealToolbar} onMouseEnter={() => setFocusZone('content')} style={{ ['--sgdb-slider-progress' as string]: `${sliderProgress}%` }}>
-                <SliderField
-                  className="size-slider"
-                  value={currentSliderValue}
-                  min={slider.min}
-                  max={slider.max}
-                  step={slider.step}
-                  showValue={false}
-                  editableValue={false}
-                  onChange={(value) => {
-                    const nextColumns = sliderValueToColumns(assetType, Number(value));
-                    setDensityByType((current) => ({ ...current, [assetType]: nextColumns }));
-                  }}
-                />
-              </div>
-              <span className="sgdbDensityValue" aria-live="polite">{columnCount} per row</span>
             </div>
-            <Focusable className="sgdbResetButton sgdbTextPill" onActivate={resetCurrentArtwork} onClick={resetCurrentArtwork} onGamepadFocus={revealToolbar} role="button">
-              Reset Artwork
-            </Focusable>
           </Focusable>
         ) : (
-          <div className="sgdb-asset-toolbar">
-            <div className="filter-buttons">
-              <button className={`sgdbFilterMainButton sgdbTextPill ${filtersOpen ? 'selected' : ''}`} type="button" onClick={() => setFiltersOpen((open) => !open)}>
-                Filter
-              </button>
-            </div>
-            <div className="sgdbDensityControl">
-              <div className="sgdbDesktopSliderWrap" style={{ ['--sgdb-slider-progress' as string]: `${sliderProgress}%` }}>
-                <input
-                  className="sgdbDesktopSlider"
-                  type="range"
-                  aria-label={`${ASSET_LABEL[assetType]} preview size, ${columnCount} per row`}
-                  value={currentSliderValue}
-                  min={slider.min}
-                  max={slider.max}
-                  step={slider.step}
-                  onChange={(event) => {
-                    const nextColumns = sliderValueToColumns(assetType, Number(event.currentTarget.value));
-                    setDensityByType((current) => ({ ...current, [assetType]: nextColumns }));
-                  }}
-                />
+          <div ref={toolbarRef} className="sgdb-asset-toolbar sgdbTopToolbar">
+            <div className="sgdbToolbarLeft">
+              {resultsControl}
+              <div className="filter-buttons">
+                <button className={`sgdbFilterMainButton sgdbTextPill ${filtersOpen ? 'selected' : ''}`} type="button" onClick={() => setFiltersOpen((open) => !open)}>
+                  Filter
+                </button>
               </div>
-              <span className="sgdbDensityValue" aria-live="polite">{columnCount} per row</span>
+              {columnsControl}
             </div>
-            <button className="sgdbResetButton sgdbTextPill" type="button" onClick={resetCurrentArtwork}>Reset Artwork</button>
+            <div className="sgdbToolbarCenterGap" aria-hidden="true" />
+            <div className="sgdbToolbarRight">
+              {appIdControls}
+              <button className="sgdbResetButton sgdbTextPill" type="button" onClick={resetCurrentArtwork}>Reset Artwork</button>
+            </div>
           </div>
         )}
 
@@ -545,7 +873,7 @@ export const GamepadView = ({
           </Focusable>
         ) : null}
 
-        <Focusable key={assetType} ref={gridRef} id="images-container" className={`sgdbGrid ${assetType} ${canShowMore ? 'hasMore' : ''} ${filtersOpen ? 'filtersOpen' : ''}`} style={tabGridStyle} flow-children="right" onGamepadFocus={() => setFocusZone('content')} onMouseEnter={() => setFocusZone('content')} onButtonDown={handleTabBumper}>
+        <Focusable key={assetType} id="images-container" className={`sgdbGrid ${assetType} ${canShowMore ? 'hasMore' : ''} ${filtersOpen ? 'filtersOpen' : ''}`} style={tabGridStyle} data-sgdb-fitted-rows={verticalFit?.rows} data-sgdb-vertical-fit={verticalFit?.exact ? 'exact' : verticalFit ? 'bounded' : undefined} flow-children="right" onGamepadFocus={() => setFocusZone('content')} onMouseEnter={() => setFocusZone('content')} onButtonDown={handleTabBumper}>
           {visibleAssets.map((asset) => (
             <div className="asset-box-wrap" key={`${assetType}-${asset.id}`}>
               {(() => {

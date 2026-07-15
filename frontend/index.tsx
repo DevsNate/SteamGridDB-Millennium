@@ -75,8 +75,6 @@ type ThemeColorSettings = {
   background: string;
   surfaceHover: string;
   gridHoverBorder: string;
-  sliderTrack: string;
-  sliderThumb: string;
 };
 type ThemePresetKey = 'fluenty' | 'steam' | 'oled' | 'midnight' | 'ember' | 'custom';
 type ThemePreset = {
@@ -237,8 +235,6 @@ const defaultThemeColors: ThemeColorSettings = {
   background: '#121212',
   surfaceHover: '#1e1e1e',
   gridHoverBorder: '#ffffff',
-  sliderTrack: '#252525',
-  sliderThumb: '#3a3a3a',
 };
 
 const COLLECTION_ASSET_TYPE: Record<SGDBAssetType, 'grid' | 'hero' | 'logo' | 'icon'> = {
@@ -262,8 +258,6 @@ const themePresets: ThemePreset[] = [
       background: '#05080b',
       surfaceHover: '#30363d',
       gridHoverBorder: '#ffffff',
-      sliderTrack: '#252a2f',
-      sliderThumb: '#1a9fff',
     },
     backgroundPaint: 'radial-gradient(1180px 760px at 52% 16%, rgba(17, 29, 38, 0.36), rgba(7, 12, 17, 0.18) 54%, transparent 84%), linear-gradient(180deg, #05080b 0, #060a0e 96px, #070d12 210px, #091017 100%)',
   },
@@ -274,8 +268,6 @@ const themePresets: ThemePreset[] = [
       background: '#000000',
       surfaceHover: '#101010',
       gridHoverBorder: '#ffffff',
-      sliderTrack: '#202020',
-      sliderThumb: '#d8d8d8',
     },
   },
   {
@@ -285,8 +277,6 @@ const themePresets: ThemePreset[] = [
       background: '#101018',
       surfaceHover: '#252235',
       gridHoverBorder: '#ffffff',
-      sliderTrack: '#302c46',
-      sliderThumb: '#8f87ff',
     },
   },
   {
@@ -296,8 +286,6 @@ const themePresets: ThemePreset[] = [
       background: '#17120f',
       surfaceHover: '#2a201a',
       gridHoverBorder: '#ffffff',
-      sliderTrack: '#36281f',
-      sliderThumb: '#d58b55',
     },
   },
 ];
@@ -370,8 +358,6 @@ const normalizeThemeColors = (colors: unknown): ThemeColorSettings => {
     background: normalizeHexColor(saved.background, defaultThemeColors.background),
     surfaceHover: normalizeHexColor(saved.surfaceHover, defaultThemeColors.surfaceHover),
     gridHoverBorder: normalizeHexColor(saved.gridHoverBorder, defaultThemeColors.gridHoverBorder),
-    sliderTrack: normalizeHexColor(saved.sliderTrack, defaultThemeColors.sliderTrack),
-    sliderThumb: normalizeHexColor(saved.sliderThumb, defaultThemeColors.sliderThumb),
   };
 };
 
@@ -391,9 +377,7 @@ const normalizeThemePreset = (preset: unknown): ThemePresetKey => {
 const sameThemeColors = (left: ThemeColorSettings, right: ThemeColorSettings) =>
   left.background === right.background
   && left.surfaceHover === right.surfaceHover
-  && left.gridHoverBorder === right.gridHoverBorder
-  && left.sliderTrack === right.sliderTrack
-  && left.sliderThumb === right.sliderThumb;
+  && left.gridHoverBorder === right.gridHoverBorder;
 
 const themePresetFromColors = (colors: ThemeColorSettings) =>
   themePresets.find((preset) => sameThemeColors(themePresetColors(preset.key, colors), colors))?.key ?? 'custom';
@@ -806,6 +790,8 @@ const SteamGridDBContent = ({
   const resolvedInitialAppId = normalizeAppIdText(initialAppId) ?? (allowAppIdFallback ? fallbackAppIdText() : null) ?? '';
   const [settings, setSettings] = useState<PluginSettings>(() => loadPluginSettings());
   const [appIdText, setAppIdText] = useState(resolvedInitialAppId);
+  const [lookupAppIdText, setLookupAppIdText] = useState(resolvedInitialAppId);
+  const [lookupAppIdDraft, setLookupAppIdDraft] = useState(resolvedInitialAppId);
   const [assetType, setAssetType] = useState<SGDBAssetType>('grid_p');
   const [assetsByType, setAssetsByType] = useState<AssetState>(() => emptyAssets());
   const [pagesByType, setPagesByType] = useState<PageState>(() => emptyPages());
@@ -820,11 +806,12 @@ const SteamGridDBContent = ({
   const [uiMode, setUiMode] = useState<EUIMode>(EUIMode.Desktop);
   const [sgdbGameId, setSgdbGameId] = useState<number | null>(null);
   const appId = useMemo(() => Number.parseInt(appIdText, 10), [appIdText]);
+  const lookupAppId = useMemo(() => Number.parseInt(lookupAppIdText, 10), [lookupAppIdText]);
   const requestVersionByTypeRef = useRef<PageState>(emptyPages());
   const activeRequestKeyByTypeRef = useRef<Partial<Record<SGDBAssetType, string>>>({});
-  const currentAppIdRef = useRef(appId);
+  const currentLookupAppIdRef = useRef(lookupAppId);
   const currentFiltersByTypeRef = useRef(filtersByType);
-  currentAppIdRef.current = appId;
+  currentLookupAppIdRef.current = lookupAppId;
   currentFiltersByTypeRef.current = filtersByType;
   const hasAppId = Number.isFinite(appId) && appId > 0;
   const isGamepadUI = uiMode === EUIMode.GamePad;
@@ -836,8 +823,6 @@ const SteamGridDBContent = ({
     '--sgdb-bg-paint': themePresetBackgroundPaint(settings.themePreset, settings.themeColors.background),
     '--sgdb-surface-hover': settings.themeColors.surfaceHover,
     '--sgdb-grid-hover-border': settings.themeColors.gridHoverBorder,
-    '--sgdb-slider-track': settings.themeColors.sliderTrack,
-    '--sgdb-slider-thumb': settings.themeColors.sliderThumb,
   } as CSSProperties;
 
   useEffect(() => {
@@ -892,19 +877,57 @@ const SteamGridDBContent = ({
     }), current));
   }, []);
 
+  const resetAssetSearchState = useCallback(() => {
+    invalidateAssetRequests();
+    setAssetsByType(emptyAssets());
+    setPagesByType(emptyPages());
+    setEndReachedByType(emptyEnd());
+    setLoadErrorByType(emptyErrors());
+    setSgdbGameId(null);
+    setApiKeyRequired(false);
+  }, [invalidateAssetRequests]);
+
+  const confirmLookupAppId = useCallback(() => {
+    const nextAppId = normalizeAppIdText(lookupAppIdDraft);
+    if (!nextAppId) {
+      notice('Invalid App ID', 'Enter a positive numeric Steam App ID.');
+      return;
+    }
+
+    setLookupAppIdDraft(nextAppId);
+    if (nextAppId === lookupAppIdText) {
+      return;
+    }
+
+    resetAssetSearchState();
+    setLookupAppIdText(nextAppId);
+    notice('Lookup App ID Updated', `Showing SteamGridDB results for ${nextAppId}. Artwork will still apply to ${appId}.`);
+  }, [appId, lookupAppIdDraft, lookupAppIdText, resetAssetSearchState]);
+
+  const resetLookupAppId = useCallback(() => {
+    const originalAppId = normalizeAppIdText(appIdText);
+    if (!originalAppId) {
+      return;
+    }
+
+    setLookupAppIdDraft(originalAppId);
+    if (originalAppId === lookupAppIdText) {
+      return;
+    }
+
+    resetAssetSearchState();
+    setLookupAppIdText(originalAppId);
+  }, [appIdText, lookupAppIdText, resetAssetSearchState]);
+
   useEffect(() => {
     const nextAppId = normalizeAppIdText(initialAppId) ?? (allowAppIdFallback ? fallbackAppIdText() : null);
     if (nextAppId) {
-      invalidateAssetRequests();
       setAppIdText(nextAppId);
-      setAssetsByType(emptyAssets());
-      setPagesByType(emptyPages());
-      setEndReachedByType(emptyEnd());
-      setLoadErrorByType(emptyErrors());
-      setSgdbGameId(null);
-      setApiKeyRequired(false);
+      setLookupAppIdText(nextAppId);
+      setLookupAppIdDraft(nextAppId);
+      resetAssetSearchState();
     }
-  }, [allowAppIdFallback, initialAppId, invalidateAssetRequests]);
+  }, [allowAppIdFallback, initialAppId, resetAssetSearchState]);
 
   useEffect(() => {
     if (initialAssetType) {
@@ -933,8 +956,8 @@ const SteamGridDBContent = ({
   }, []);
 
   const loadAssets = useCallback(async (type: SGDBAssetType, nextPage = 0, append = false) => {
-    if (!Number.isFinite(appId) || loadingByType[type] || endReachedByType[type]) return;
-    const requestAppId = appId;
+    if (!Number.isFinite(lookupAppId) || loadingByType[type] || endReachedByType[type]) return;
+    const requestAppId = lookupAppId;
     const requestFilters = { ...filters };
     const requestFilterKey = filterStateKey(requestFilters);
     const requestKey = `${requestAppId}:${nextPage}:${append ? 'append' : 'replace'}:${requestFilterKey}:${sgdbGameId ?? 'steam'}`;
@@ -944,7 +967,7 @@ const SteamGridDBContent = ({
     const requestVersion = requestVersionByTypeRef.current[type];
     activeRequestKeyByTypeRef.current[type] = requestKey;
     const isCurrentRequest = () => requestVersionByTypeRef.current[type] === requestVersion
-      && currentAppIdRef.current === requestAppId
+      && currentLookupAppIdRef.current === requestAppId
       && filterStateKey(currentFiltersByTypeRef.current[type] ?? defaultFilters) === requestFilterKey;
 
     if (!append) setApiKeyRequired(false);
@@ -1009,13 +1032,13 @@ const SteamGridDBContent = ({
         setLoadingByType((current) => ({ ...current, [type]: false }));
       }
     }
-  }, [appId, endReachedByType, filters, loadingByType, sgdbGameId]);
+  }, [endReachedByType, filters, loadingByType, lookupAppId, sgdbGameId]);
 
   useEffect(() => {
-    if (!Number.isFinite(appId)) return;
+    if (!Number.isFinite(lookupAppId)) return;
     if (assetsByType[assetType].length > 0 || loadingByType[assetType] || endReachedByType[assetType] || loadErrorByType[assetType]) return;
     void loadAssets(assetType, 0, false);
-  }, [appId, assetType, assetsByType, endReachedByType, loadAssets, loadErrorByType, loadingByType]);
+  }, [assetType, assetsByType, endReachedByType, loadAssets, loadErrorByType, loadingByType, lookupAppId]);
 
   const resetCurrentTab = useCallback(() => {
     invalidateAssetRequests(assetType);
@@ -1205,6 +1228,12 @@ const SteamGridDBContent = ({
     resetCurrentTab,
     retryCurrentLoad,
     resetArtwork,
+    originalAppIdText: appIdText,
+    lookupAppIdText,
+    lookupAppIdDraft,
+    setLookupAppIdDraft,
+    confirmLookupAppId,
+    resetLookupAppId,
     isGamepadUI,
   };
 
@@ -1526,8 +1555,6 @@ const styles = `
   --sgdb-border-soft: #2c2c2c;
   --sgdb-grid-hover-border: #ffffff;
   --sgdb-grid-hover-border-visible: color-mix(in srgb, var(--sgdb-grid-hover-border) 58%, transparent);
-  --sgdb-slider-track: #252525;
-  --sgdb-slider-thumb: #3a3a3a;
   --sgdb-accent: var(--accent-col, #1a9fff);
   --sgdb-accent-soft: var(--accent-secondary, #8fcfff);
   --sgdb-accent-text: #07111d;
@@ -1637,7 +1664,7 @@ body:has(#sgdb-wrap.sgdbDesktopToolbar.sgdbPopoutContent) [class*="ModalPosition
 }
 
 .sgdbDesktopToolbar.sgdbPopoutContent .tabcontents-wrap {
-  padding-top: 56px;
+  padding-top: 0;
 }
 
 .sgdbPopoutContent .tabcontents-wrap::-webkit-scrollbar {
@@ -1846,9 +1873,9 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 .sgdbGamepad .sgdbGamepadTabs {
   --sgdb-tab-vertical-gap: 18px;
   justify-content: center;
-  gap: 32px;
+  gap: clamp(8px, 1.6vw, 32px);
   min-height: calc(32px + var(--sgdb-tab-vertical-gap));
-  padding: var(--sgdb-tab-vertical-gap) 56px 0;
+  padding: var(--sgdb-tab-vertical-gap) clamp(12px, 2.75vw, 56px) 0;
   background: transparent;
   border-bottom: 0;
   scroll-margin-top: 14px;
@@ -1859,7 +1886,7 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   min-width: 0;
   height: 32px;
   margin-top: 0;
-  padding: 0 16px;
+  padding: 0 clamp(8px, 0.8vw, 16px);
   border: 1px solid transparent;
   --gpFocusBorderRadius: 999px;
   --focus-ring-border-radius: 999px;
@@ -2525,10 +2552,11 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   width: max-content;
   max-width: calc(100% - 96px);
   min-height: 56px;
-  padding: 0 28px;
+  padding: 0 clamp(10px, 2vw, 28px);
   background: transparent;
   transform: translateX(-50%);
   isolation: isolate;
+  pointer-events: none;
 }
 
 .sgdbDesktopToolbar.sgdbPopoutContent .sgdbGamepadTabs::before {
@@ -2550,6 +2578,7 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 .sgdbDesktopToolbar.sgdbPopoutContent .sgdbGamepadTab {
   position: relative;
   z-index: 1;
+  pointer-events: auto;
 }
 
 .sgdbDesktopToolbar.sgdbPopoutContent .sgdb-asset-toolbar {
@@ -2604,12 +2633,6 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   white-space: nowrap;
 }
 
-.sgdb-asset-toolbar .size-slider {
-  flex: 1;
-  padding: 0.5em 1em;
-  justify-content: center;
-}
-
 .sgdbGamepad .sgdb-asset-toolbar {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -2623,107 +2646,6 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 
 .sgdbGamepad .sgdb-asset-toolbar .filter-buttons {
   width: auto;
-}
-
-.sgdbGamepad .sgdbDesktopSliderWrap {
-  position: relative;
-  display: flex;
-  align-items: center;
-  width: 100%;
-  height: 30px;
-  min-width: 0;
-  border-radius: 999px;
-}
-
-.sgdbGamepad .sgdbDesktopSliderWrap::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 50%;
-  height: 6px;
-  border-radius: 999px;
-  transform: translateY(-50%);
-  background: linear-gradient(
-    90deg,
-    var(--sgdb-slider-thumb) 0%,
-    var(--sgdb-slider-thumb) var(--sgdb-slider-progress),
-    var(--sgdb-slider-track) var(--sgdb-slider-progress),
-    var(--sgdb-slider-track) 100%
-  );
-}
-
-.sgdbGamepad .sgdbControllerSliderThumb {
-  position: absolute;
-  left: var(--sgdb-slider-progress);
-  top: 50%;
-  z-index: 2;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--sgdb-text-control);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
-  transform: translate(-50%, -50%);
-  pointer-events: none;
-}
-
-.sgdbGamepad .sgdbDesktopSlider {
-  position: relative;
-  z-index: 1;
-  width: 100%;
-  height: 30px;
-  margin: 0;
-  padding: 0;
-  appearance: none;
-  -webkit-appearance: none;
-  background: transparent;
-  outline: 0;
-  cursor: pointer;
-}
-
-.sgdbGamepad .sgdbDesktopSlider::-webkit-slider-runnable-track {
-  height: 6px;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-}
-
-.sgdbGamepad .sgdbDesktopSlider::-webkit-slider-thumb {
-  width: 14px;
-  height: 14px;
-  margin-top: -4px;
-  border: 0;
-  border-radius: 50%;
-  background: var(--sgdb-text-control);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
-  appearance: none;
-  -webkit-appearance: none;
-}
-
-.sgdbGamepad .sgdbDesktopSlider:focus-visible::-webkit-slider-thumb {
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5);
-}
-
-.sgdbGamepad .sgdbSliderFocusable.gpfocus::after,
-.sgdbGamepad .sgdbSliderFocusable:focus-visible::after {
-  content: '';
-  position: absolute;
-  inset: 6px -10px;
-  border: 1px solid var(--sgdb-border-soft);
-  border-radius: 999px;
-  background: var(--sgdb-surface-hover);
-  pointer-events: none;
-  z-index: 0;
-}
-
-.sgdbGamepad .sgdbSliderFocusable.gpfocus::before,
-.sgdbGamepad .sgdbSliderFocusable:focus-visible::before {
-  z-index: 1;
-}
-
-.sgdbGamepad .sgdbSliderFocusable.gpfocus .sgdbDesktopSlider,
-.sgdbGamepad .sgdbSliderFocusable:focus-visible .sgdbDesktopSlider {
-  z-index: 2;
 }
 
 .sgdbGamepad .sgdbFilterMainButton,
@@ -2778,39 +2700,25 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   outline: 0 !important;
 }
 
-.sgdbSliderWithMarks {
-  position: relative;
-  width: 100%;
-  min-width: 0;
-}
-
-.sgdbDensityControl {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) max-content;
-  align-items: center;
-  gap: clamp(10px, 1.3vw, 18px);
-  width: 100%;
-  min-width: 0;
-}
-
-.sgdbDensityValue {
-  min-width: 68px;
-  color: var(--sgdb-text-muted);
-  font-size: clamp(11px, 0.8vw, 13px);
-  font-weight: 700;
-  letter-spacing: 0.25px;
-  text-align: right;
-  white-space: nowrap;
-}
-
-.sgdbGamepad .sgdb-asset-toolbar .size-slider {
-  padding: 0;
-  min-height: 30px;
+.sgdbColumnsControl {
   display: flex;
   align-items: center;
-  background: transparent !important;
-  box-shadow: none !important;
-  outline: none !important;
+  justify-content: center;
+  justify-self: center;
+  gap: 10px;
+  width: max-content;
+  min-width: 0;
+}
+
+.sgdbColumnsDropdown {
+  width: 142px;
+  min-width: 142px;
+}
+
+.sgdbColumnsDropdown > * {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .sgdbResetButton {
@@ -3001,8 +2909,8 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 .sgdbGrid {
   display: grid;
   grid-template-columns: repeat(var(--asset-columns, 4), minmax(0, 1fr));
-  padding: 10px clamp(12px, 2vw, 32px) max(42px, var(--gamepadui-current-footer-height, 34px));
-  row-gap: clamp(14px, 1.7vw, 28px);
+  padding: var(--sgdb-grid-padding-top, 10px) clamp(12px, 2vw, 32px) max(42px, var(--gamepadui-current-footer-height, 34px));
+  row-gap: var(--sgdb-grid-row-gap, clamp(14px, 1.7vw, 28px));
   column-gap: clamp(12px, 1.6vw, 28px);
   width: 100%;
   justify-content: stretch;
@@ -3016,8 +2924,8 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 
 .sgdbDesktopToolbar .sgdbGrid {
   justify-content: stretch;
-  padding: 14px clamp(14px, 2vw, 32px) var(--gamepadui-current-footer-height, 34px);
-  row-gap: clamp(16px, 1.8vw, 30px);
+  padding: var(--sgdb-grid-padding-top, 14px) clamp(14px, 2vw, 32px) var(--gamepadui-current-footer-height, 34px);
+  row-gap: var(--sgdb-grid-row-gap, clamp(16px, 1.8vw, 30px));
   column-gap: clamp(14px, 1.6vw, 28px);
 }
 
@@ -3421,58 +3329,6 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   flex: 0 0 auto;
 }
 
-.sgdbDesktop .sgdb-asset-toolbar .size-slider {
-  width: 100%;
-  min-height: 34px;
-  padding: 0;
-  background: transparent !important;
-  box-shadow: none !important;
-  outline: none !important;
-  display: flex;
-  align-items: center;
-}
-
-.sgdbDesktop .sgdbDesktopSlider {
-  width: 100%;
-  height: 34px;
-  margin: 0;
-  padding: 0;
-  appearance: none;
-  -webkit-appearance: none;
-  background: transparent;
-  outline: 0;
-  cursor: pointer;
-}
-
-.sgdbDesktop .sgdbDesktopSlider::-webkit-slider-runnable-track {
-  height: 8px;
-  border-radius: 999px;
-  border: 0;
-  background: linear-gradient(
-    90deg,
-    var(--sgdb-slider-thumb) 0%,
-    var(--sgdb-slider-thumb) var(--sgdb-slider-progress),
-    var(--sgdb-slider-track) var(--sgdb-slider-progress),
-    var(--sgdb-slider-track) 100%
-  );
-}
-
-.sgdbDesktop .sgdbDesktopSlider::-webkit-slider-thumb {
-  width: 14px;
-  height: 14px;
-  margin-top: -3px;
-  border: 0;
-  border-radius: 50%;
-  background: var(--sgdb-text-control);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
-  appearance: none;
-  -webkit-appearance: none;
-}
-
-.sgdbDesktop .sgdbDesktopSlider:focus-visible::-webkit-slider-thumb {
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5);
-}
-
 .sgdbDesktop .sgdbFilterMainButton,
 .sgdbDesktop .sgdbResetButton {
   width: auto;
@@ -3603,70 +3459,6 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   box-shadow: none !important;
 }
 
-.sgdbDesktopToolbar .sgdbDesktopSliderWrap {
-  position: relative;
-  display: flex;
-  align-items: center;
-  width: 100%;
-  height: 30px;
-  min-width: 0;
-}
-
-.sgdbDesktopToolbar .sgdbDesktopSliderWrap::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 50%;
-  height: 6px;
-  border-radius: 999px;
-  transform: translateY(-50%);
-  background: linear-gradient(
-    90deg,
-    var(--sgdb-slider-thumb) 0%,
-    var(--sgdb-slider-thumb) var(--sgdb-slider-progress),
-    var(--sgdb-slider-track) var(--sgdb-slider-progress),
-    var(--sgdb-slider-track) 100%
-  );
-}
-
-.sgdbDesktopToolbar .sgdbDesktopSlider {
-  position: relative;
-  z-index: 1;
-  width: 100%;
-  height: 30px;
-  margin: 0;
-  padding: 0;
-  appearance: none;
-  -webkit-appearance: none;
-  background: transparent;
-  outline: 0;
-  cursor: pointer;
-}
-
-.sgdbDesktopToolbar .sgdbDesktopSlider::-webkit-slider-runnable-track {
-  height: 6px;
-  border-radius: 999px;
-  border: 0;
-  background: transparent;
-}
-
-.sgdbDesktopToolbar .sgdbDesktopSlider::-webkit-slider-thumb {
-  width: 14px;
-  height: 14px;
-  margin-top: -4px;
-  border: 0;
-  border-radius: 50%;
-  background: var(--sgdb-text-control);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
-  appearance: none;
-  -webkit-appearance: none;
-}
-
-.sgdbDesktopToolbar .sgdbDesktopSlider:focus-visible::-webkit-slider-thumb {
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5);
-}
-
 .sgdbDesktopToolbar .image-wrap.sgdbAsset.type-grid_l .sgdbExternalLinkButton,
 .sgdbDesktopToolbar .image-wrap.sgdbAsset.type-hero .sgdbExternalLinkButton {
   width: clamp(30px, min(11.25cqw, 36cqh), 50px);
@@ -3702,6 +3494,287 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 .sgdbDesktopToolbar .image-wrap.sgdbAsset.type-hero.gpfocus .sgdbChips span,
 .sgdbDesktopToolbar .image-wrap.sgdbAsset.type-hero:focus-visible .sgdbChips span {
   transform: translateX(0);
+}
+
+.sgdbGamepad .sgdbTopToolbar,
+.sgdbDesktopToolbar .sgdbTopToolbar {
+  display: grid;
+  position: relative;
+  z-index: 3;
+  grid-template-columns: minmax(0, 1fr) var(--sgdb-tab-island-width, clamp(450px, 42vw, 840px)) minmax(0, 1fr);
+  align-items: center;
+  gap: 0;
+  min-height: 56px;
+  padding: 0 32px;
+  background: transparent;
+  border: 0;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.sgdbToolbarLeft,
+.sgdbToolbarRight {
+  display: flex;
+  align-items: center;
+  justify-content: space-evenly;
+  min-width: 0;
+  gap: 0;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+}
+
+.sgdbToolbarRight {
+  padding-right: var(--sgdb-close-safe-padding, 0px);
+  box-sizing: border-box;
+}
+
+.sgdbToolbarCenterGap {
+  align-self: stretch;
+  min-width: 0;
+  pointer-events: none;
+}
+
+.sgdbTopToolbar .sgdbResultsState {
+  position: static;
+  display: flex;
+  flex: 0 0 132px;
+  align-items: center;
+  justify-content: center;
+  width: 132px;
+  min-width: 132px;
+  max-width: 132px;
+  height: 32px;
+  margin: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--sgdb-text-control);
+  font-size: 12.75px;
+  font-weight: 700;
+  letter-spacing: 0.42px;
+  line-height: 1;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
+}
+
+.sgdbTopToolbar .filter-buttons,
+.sgdbTopToolbar .sgdbColumnsControl,
+.sgdbTopToolbar .sgdbAppIdControls,
+.sgdbTopToolbar .sgdbResetButton {
+  flex: 0 0 auto;
+}
+
+.sgdbTopToolbar .sgdbColumnsControl {
+  width: 132px;
+  min-width: 132px;
+}
+
+.sgdbTopToolbar .sgdbResetButton {
+  white-space: nowrap;
+}
+
+.sgdbColumnsDropdown {
+  width: 132px;
+  min-width: 132px;
+}
+
+.sgdbColumnsDropdown .DialogDropDown {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 13px;
+  align-items: center;
+  width: 100%;
+  height: 32px;
+  min-height: 32px;
+  gap: 0;
+  padding: 0 12px 0 27px;
+  border: 1px solid transparent !important;
+  border-radius: 999px !important;
+  color: var(--sgdb-text-control) !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  box-sizing: border-box;
+  font-size: 12.75px;
+  font-weight: 700;
+  letter-spacing: 0.42px;
+}
+
+.sgdbColumnsDropdown .DialogDropDown:hover,
+.sgdbColumnsDropdown .DialogDropDown:focus-visible,
+.sgdbColumnsDropdown .DialogDropDown.gpfocus,
+.sgdbColumnsDropdown .DialogDropDown[aria-expanded="true"] {
+  color: var(--sgdb-text) !important;
+  border-color: var(--sgdb-border-soft) !important;
+  background: var(--sgdb-surface-hover) !important;
+}
+
+.sgdbColumnsDropdown .DialogDropDown_CurrentDisplay {
+  grid-column: 1;
+  justify-self: start;
+  min-width: max-content;
+  overflow: visible;
+  white-space: nowrap;
+  text-overflow: clip;
+  text-align: left;
+  line-height: 1;
+}
+
+.sgdbColumnsDropdown .DialogDropDown_Arrow {
+  grid-column: 2;
+  justify-self: center;
+  margin-left: 0;
+  color: var(--sgdb-text-control);
+}
+
+.sgdbDesktopToolbar.sgdbPopoutContent > .tabcontents-wrap {
+  z-index: auto;
+}
+
+.sgdbColumnsDropdown .DialogDropDown_Arrow svg {
+  width: 12px;
+  height: 12px;
+  fill: currentColor;
+}
+
+.sgdbAppIdControls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sgdbAppIdInput {
+  width: 138px;
+  height: 32px;
+  min-width: 92px;
+  padding: 0 13px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  outline: 0;
+  color: var(--sgdb-text-control);
+  background: color-mix(in srgb, var(--sgdb-surface-hover) 72%, transparent);
+  box-shadow: none;
+  box-sizing: border-box;
+  font-size: 12.75px;
+  font-weight: 700;
+  letter-spacing: 0.42px;
+  line-height: 1;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.sgdbAppIdInput:hover,
+.sgdbAppIdInput:focus {
+  color: var(--sgdb-text);
+  border-color: transparent;
+  background: var(--sgdb-surface-hover);
+}
+
+.sgdbAppIdAction {
+  width: 34px;
+  height: 32px;
+  min-width: 34px;
+  padding: 0;
+  color: var(--sgdb-text-control);
+}
+
+.sgdbAppIdAction:hover,
+.sgdbAppIdAction:focus-visible,
+.sgdbAppIdAction.gpfocus {
+  color: var(--sgdb-text);
+  border-color: var(--sgdb-border-soft);
+  background: var(--sgdb-surface-hover);
+}
+
+.sgdbAppIdAction:disabled {
+  opacity: 0.36;
+  cursor: default;
+}
+
+.sgdbToolbarIcon {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+@media (max-width: 1500px) {
+  .sgdbGamepad .sgdbTopToolbar,
+  .sgdbDesktopToolbar .sgdbTopToolbar {
+    grid-template-columns: minmax(0, 1fr) var(--sgdb-tab-island-width, clamp(360px, 38vw, 570px)) minmax(0, 1fr);
+    padding-right: 18px;
+    padding-left: 18px;
+  }
+
+  .sgdbToolbarLeft,
+  .sgdbToolbarRight {
+    gap: 0;
+  }
+
+  .sgdbAppIdInput {
+    width: 112px;
+  }
+}
+
+@media (max-width: 1100px) {
+  .sgdbAppIdControls {
+    gap: 4px;
+  }
+
+  .sgdbToolbarRight {
+    gap: 0;
+  }
+
+  .sgdbAppIdInput {
+    width: 78px;
+    min-width: 78px;
+    padding-right: 8px;
+    padding-left: 8px;
+    font-size: 11.5px;
+  }
+
+  .sgdbAppIdAction {
+    width: 28px;
+    min-width: 28px;
+  }
+
+  .sgdbTopToolbar .sgdbResetButton {
+    padding-right: 8px;
+    padding-left: 8px;
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 950px) {
+  .sgdbDesktopToolbar.sgdbPopoutContent .sgdbGamepadTabs {
+    gap: 6px;
+    padding-right: 8px;
+    padding-left: 8px;
+  }
+
+  .sgdbDesktopToolbar.sgdbPopoutContent .sgdbGamepadTab {
+    padding-right: 4px;
+    padding-left: 4px;
+    font-size: 11px;
+    letter-spacing: 0.2px;
+  }
+
+  .sgdbGamepad .sgdbTopToolbar,
+  .sgdbDesktopToolbar .sgdbTopToolbar {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .sgdbToolbarLeft,
+  .sgdbToolbarRight {
+    gap: 0;
+  }
+
+  .sgdbAppIdInput {
+    width: 72px;
+    min-width: 72px;
+  }
 }
 
 `;

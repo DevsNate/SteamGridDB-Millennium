@@ -44,21 +44,10 @@ export const normalizeDensityState = (value: unknown, mode: AssetDensityMode): A
   };
 };
 
-export const columnsToSliderValue = (assetType: SGDBAssetType, columns: number) => {
+export const columnOptions = (assetType: SGDBAssetType) => {
   const profile = ASSET_LAYOUT_PROFILES[assetType];
-  return profile.maxColumns - clampColumns(assetType, columns, profile.desktopDefault);
-};
-
-export const sliderValueToColumns = (assetType: SGDBAssetType, value: number) => {
-  const profile = ASSET_LAYOUT_PROFILES[assetType];
-  return clampColumns(assetType, profile.maxColumns - Math.round(value), profile.desktopDefault);
-};
-
-export const sliderRange = (assetType: SGDBAssetType) => {
-  const profile = ASSET_LAYOUT_PROFILES[assetType];
-  return {
-    min: 0,
-    max: profile.maxColumns - profile.minColumns,
-    step: 1,
-  };
+  return Array.from(
+    { length: profile.maxColumns - profile.minColumns + 1 },
+    (_, index) => profile.minColumns + index,
+  );
 };
