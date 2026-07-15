@@ -1,6 +1,8 @@
 import { DialogButton, Focusable, GamepadButton, SliderField, Spinner } from '@steambrew/client';
 import { Dispatch, SetStateAction, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { AssetState, EndState, FilterState, LoadingState, PageState, SGDBAsset, SGDBAssetType, ZoomState } from '../index';
+import { columnsToSliderValue, sliderRange, sliderValueToColumns } from '../layout';
+import type { AssetDensityState } from '../layout';
+import type { AssetState, EndState, ErrorState, FilterState, LoadingState, PageState, SGDBAsset, SGDBAssetType } from '../index';
 
 type ViewProps = {
   assetType: SGDBAssetType;
@@ -9,11 +11,11 @@ type ViewProps = {
   pagesByType: PageState;
   loadingByType: LoadingState;
   endReachedByType: EndState;
+  loadErrorByType: ErrorState;
   filters: FilterState;
   toggleFilter: (key: keyof FilterState) => void;
-  zoomByType: ZoomState;
-  zoomDefaults: ZoomState;
-  setZoomByType: Dispatch<SetStateAction<ZoomState>>;
+  densityByType: AssetDensityState;
+  setDensityByType: Dispatch<SetStateAction<AssetDensityState>>;
   filtersOpen: boolean;
   setFiltersOpen: Dispatch<SetStateAction<boolean>>;
   applyingId: number | null;
@@ -25,6 +27,7 @@ type ViewProps = {
   showCreatorNames: boolean;
   loadAssets: (type: SGDBAssetType, nextPage?: number, append?: boolean) => Promise<void>;
   resetCurrentTab: () => void;
+  retryCurrentLoad: () => void;
   resetArtwork: (type: SGDBAssetType) => Promise<void>;
   isGamepadUI?: boolean;
 };
@@ -46,20 +49,6 @@ const VIEW_LABEL: Record<ViewTab, string> = {
 type FocusZone = 'tabs' | 'content';
 const isAnimatedAsset = (src: string) => /\.(webm|mp4)(\?|$)/i.test(src);
 const DEFAULT_VISIBLE_ROWS = 7;
-
-const assetGridStyle = (assetType: SGDBAssetType, zoom: number) => {
-  return { ['--asset-size' as string]: `${zoom}px` };
-};
-
-const sliderLimits = (assetType: SGDBAssetType) => ({
-  min: assetType === 'hero' ? 220 : assetType === 'logo' ? 180 : assetType === 'grid_l' ? 160 : 100,
-  max: assetType === 'hero' ? 760 : assetType === 'logo' ? 640 : assetType === 'grid_l' ? 640 : assetType === 'grid_p' ? 300 : 220,
-  step: 1,
-});
-
-const zoomToSliderValue = (_assetType: SGDBAssetType, zoom: number, _slider: ReturnType<typeof sliderLimits>) => zoom;
-
-const sliderValueToZoom = (_assetType: SGDBAssetType, value: number, _slider: ReturnType<typeof sliderLimits>) => value;
 
 const AssetPreview = ({ asset, assetType }: { asset: SGDBAsset; assetType: SGDBAssetType }) => {
   const [sourceIndex, setSourceIndex] = useState(0);
@@ -108,11 +97,11 @@ export const GamepadView = ({
   pagesByType,
   loadingByType,
   endReachedByType,
+  loadErrorByType,
   filters,
   toggleFilter,
-  zoomByType,
-  zoomDefaults,
-  setZoomByType,
+  densityByType,
+  setDensityByType,
   filtersOpen,
   setFiltersOpen,
   applyingId,
@@ -124,6 +113,7 @@ export const GamepadView = ({
   showCreatorNames,
   loadAssets,
   resetCurrentTab,
+  retryCurrentLoad,
   resetArtwork,
   isGamepadUI = true,
 }: ViewProps) => {
@@ -147,25 +137,15 @@ export const GamepadView = ({
     logo: DEFAULT_VISIBLE_ROWS,
     icon: DEFAULT_VISIBLE_ROWS,
   });
-  const [columnCountByType, setColumnCountByType] = useState<Record<SGDBAssetType, number>>({
-    grid_p: 1,
-    grid_l: 1,
-    hero: 1,
-    logo: 1,
-    icon: 1,
-  });
   const tabAssets = assetsByType[assetType];
   const tabLoading = loadingByType[assetType];
   const tabEndReached = endReachedByType[assetType];
-  const slider = sliderLimits(assetType);
-  const savedZoom = zoomByType[assetType];
-  const normalizedZoom = savedZoom < slider.min || savedZoom > slider.max ? zoomDefaults[assetType] : savedZoom;
-  const clampedZoom = Math.max(slider.min, Math.min(slider.max, normalizedZoom));
-  const currentZoom = clampedZoom;
-  const currentSliderValue = zoomToSliderValue(assetType, currentZoom, slider);
-  const tabGridStyle = assetGridStyle(assetType, currentZoom);
+  const tabError = loadErrorByType[assetType];
+  const slider = sliderRange(assetType);
+  const columnCount = densityByType[assetType];
+  const currentSliderValue = columnsToSliderValue(assetType, columnCount);
+  const tabGridStyle = { ['--asset-columns' as string]: columnCount };
   const sliderProgress = ((currentSliderValue - slider.min) / (slider.max - slider.min)) * 100;
-  const columnCount = columnCountByType[assetType];
   const rawVisibleLimit = visibleRowsByType[assetType] * columnCount;
   const rawVisibleCount = Math.min(tabAssets.length, rawVisibleLimit);
   const hasMoreAfterRawVisible = tabAssets.length > rawVisibleCount || !tabEndReached;
@@ -174,7 +154,7 @@ export const GamepadView = ({
     : rawVisibleCount;
   const visibleAssets = tabAssets.slice(0, visibleCount);
   const hasHiddenLoadedAssets = tabAssets.length > visibleAssets.length;
-  const canShowMore = tabAssets.length > 0 && (hasHiddenLoadedAssets || !tabEndReached);
+  const canShowMore = !tabError && tabAssets.length > 0 && (hasHiddenLoadedAssets || !tabEndReached);
   const selectTab = useCallback((tab: ViewTab) => {
     activeTabRef.current = tab;
     setActiveTab(tab);
@@ -433,32 +413,6 @@ export const GamepadView = ({
     }
   }, [tabLoading, visibleAssets.length]);
 
-  useEffect(() => {
-    const grid = gridRef.current;
-    if (!grid) return undefined;
-
-    const updateColumns = () => {
-      const firstRowTop = grid.querySelector<HTMLElement>('.asset-box-wrap')?.offsetTop;
-      const rowColumns = firstRowTop === undefined
-        ? 0
-        : Array.from(grid.querySelectorAll<HTMLElement>('.asset-box-wrap')).filter((child) => Math.abs(child.offsetTop - firstRowTop) <= 2).length;
-      const cssColumns = window.getComputedStyle(grid).gridTemplateColumns.split(' ').filter((track) => track && track !== 'none').length;
-      const columns = Math.max(rowColumns, cssColumns, 1);
-      setColumnCountByType((current) => current[assetType] === columns ? current : { ...current, [assetType]: columns });
-    };
-
-    let frame = window.requestAnimationFrame(() => {
-      updateColumns();
-      frame = window.requestAnimationFrame(updateColumns);
-    });
-    const observer = new ResizeObserver(updateColumns);
-    observer.observe(grid);
-    return () => {
-      window.cancelAnimationFrame(frame);
-      observer.disconnect();
-    };
-  }, [assetType, visibleAssets.length, zoomByType]);
-
   return (
     <>
       {isGamepadUI ? (
@@ -514,23 +468,26 @@ export const GamepadView = ({
                 Filter
               </Focusable>
             </Focusable>
-            <div className="sgdbSliderWithMarks" onFocusCapture={revealToolbar} onMouseEnter={() => setFocusZone('content')} style={{ ['--sgdb-slider-progress' as string]: `${sliderProgress}%` }}>
-              <SliderField
-                className="size-slider"
-                value={currentSliderValue}
-                min={slider.min}
-                max={slider.max}
-                step={slider.step}
-                showValue={false}
-                editableValue={false}
-                onChange={(value) => {
-                  const nextZoom = sliderValueToZoom(assetType, Number(value), slider);
-                  setZoomByType((current) => ({ ...current, [assetType]: nextZoom }));
-                }}
-              />
+            <div className="sgdbDensityControl">
+              <div className="sgdbSliderWithMarks" onFocusCapture={revealToolbar} onMouseEnter={() => setFocusZone('content')} style={{ ['--sgdb-slider-progress' as string]: `${sliderProgress}%` }}>
+                <SliderField
+                  className="size-slider"
+                  value={currentSliderValue}
+                  min={slider.min}
+                  max={slider.max}
+                  step={slider.step}
+                  showValue={false}
+                  editableValue={false}
+                  onChange={(value) => {
+                    const nextColumns = sliderValueToColumns(assetType, Number(value));
+                    setDensityByType((current) => ({ ...current, [assetType]: nextColumns }));
+                  }}
+                />
+              </div>
+              <span className="sgdbDensityValue" aria-live="polite">{columnCount} per row</span>
             </div>
             <Focusable className="sgdbResetButton sgdbTextPill" onActivate={resetCurrentArtwork} onClick={resetCurrentArtwork} onGamepadFocus={revealToolbar} role="button">
-              Reset
+              Reset Artwork
             </Focusable>
           </Focusable>
         ) : (
@@ -540,21 +497,25 @@ export const GamepadView = ({
                 Filter
               </button>
             </div>
-            <div className="sgdbDesktopSliderWrap" style={{ ['--sgdb-slider-progress' as string]: `${sliderProgress}%` }}>
-              <input
-                className="sgdbDesktopSlider"
-                type="range"
-                value={currentSliderValue}
-                min={slider.min}
-                max={slider.max}
-                step={slider.step}
-                onChange={(event) => {
-                  const nextZoom = sliderValueToZoom(assetType, Number(event.currentTarget.value), slider);
-                  setZoomByType((current) => ({ ...current, [assetType]: nextZoom }));
-                }}
-              />
+            <div className="sgdbDensityControl">
+              <div className="sgdbDesktopSliderWrap" style={{ ['--sgdb-slider-progress' as string]: `${sliderProgress}%` }}>
+                <input
+                  className="sgdbDesktopSlider"
+                  type="range"
+                  aria-label={`${ASSET_LABEL[assetType]} preview size, ${columnCount} per row`}
+                  value={currentSliderValue}
+                  min={slider.min}
+                  max={slider.max}
+                  step={slider.step}
+                  onChange={(event) => {
+                    const nextColumns = sliderValueToColumns(assetType, Number(event.currentTarget.value));
+                    setDensityByType((current) => ({ ...current, [assetType]: nextColumns }));
+                  }}
+                />
+              </div>
+              <span className="sgdbDensityValue" aria-live="polite">{columnCount} per row</span>
             </div>
-            <button className="sgdbResetButton sgdbTextPill" type="button" onClick={resetCurrentArtwork}>Reset</button>
+            <button className="sgdbResetButton sgdbTextPill" type="button" onClick={resetCurrentArtwork}>Reset Artwork</button>
           </div>
         )}
 
@@ -594,7 +555,6 @@ export const GamepadView = ({
                 className={`image-wrap sgdbAsset type-${assetType}`}
                 tabIndex={0}
                 data-sgdb-asset-id={asset.id}
-                style={{ paddingBottom: `${asset.width === asset.height ? 100 : (asset.height / asset.width) * 100}%` }}
                 onActivate={() => void applyAssetAndRestoreFocus(asset, assetType)}
                 onClick={() => void applyAssetAndRestoreFocus(asset, assetType)}
                 onOKActionDescription={`Apply ${ASSET_LABEL[assetType]}`}
@@ -664,11 +624,20 @@ export const GamepadView = ({
           ))}
           {tabAssets.length === 0 && !tabLoading ? (
             <div className="sgdbEmpty">
-              No {ASSET_LABEL[assetType].toLowerCase()} artwork found for this Steam app.
-              <DialogButton onClick={resetCurrentTab}>Retry</DialogButton>
+              {tabError
+                ? `Could not load ${ASSET_LABEL[assetType].toLowerCase()} artwork: ${tabError}`
+                : `No ${ASSET_LABEL[assetType].toLowerCase()} artwork found for this Steam app.`}
+              <DialogButton onClick={tabError ? retryCurrentLoad : resetCurrentTab}>Retry</DialogButton>
             </div>
           ) : null}
         </Focusable>
+
+        {tabError && tabAssets.length > 0 && !tabLoading ? (
+          <div className="sgdbEmpty" role="alert">
+            Could not load more {ASSET_LABEL[assetType].toLowerCase()} artwork: {tabError}
+            <DialogButton onClick={retryCurrentLoad}>Retry</DialogButton>
+          </div>
+        ) : null}
 
         {canShowMore ? <div className={`sgdbMoreRevealSpacer ${tabLoading ? 'loading' : ''}`} aria-hidden="true" /> : null}
         </>

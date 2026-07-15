@@ -24,8 +24,10 @@ import {
   ToggleField,
   useParams,
 } from '@steambrew/client';
-import { Dispatch, FC, SetStateAction, useCallback, useEffect, useMemo, useState } from 'react';
+import { Dispatch, FC, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
+import { densityDefaults, normalizeDensityState } from './layout';
+import type { AssetDensityState } from './layout';
 import { GamepadView } from './views/GamepadView';
 
 declare const SteamClient: {
@@ -60,6 +62,7 @@ export type AssetState = Record<SGDBAssetType, SGDBAsset[]>;
 export type PageState = Record<SGDBAssetType, number>;
 export type LoadingState = Record<SGDBAssetType, boolean>;
 export type EndState = Record<SGDBAssetType, boolean>;
+export type ErrorState = Record<SGDBAssetType, string | null>;
 export type FilterState = {
   static: boolean;
   animated: boolean;
@@ -67,7 +70,6 @@ export type FilterState = {
   humor: boolean;
   epilepsy: boolean;
 };
-export type ZoomState = Record<SGDBAssetType, number>;
 type FilterStateByType = Record<SGDBAssetType, FilterState>;
 type ThemeColorSettings = {
   background: string;
@@ -88,8 +90,6 @@ type PluginSettings = {
   showExternalLinks: boolean;
   showCollectionButtons: boolean;
   showCreatorNames: boolean;
-  preloadPages: number;
-  spaceThemeCompatibility: boolean;
   themePreset: ThemePresetKey;
   themeColors: ThemeColorSettings;
 };
@@ -197,6 +197,14 @@ const emptyEnd = (): EndState => ({
   hero: false,
   logo: false,
   icon: false,
+});
+
+const emptyErrors = (): ErrorState => ({
+  grid_p: null,
+  grid_l: null,
+  hero: null,
+  logo: null,
+  icon: null,
 });
 
 const DEFAULT_STYLES: Record<SGDBAssetType, string[]> = {
@@ -307,59 +315,36 @@ const defaultSettings: PluginSettings = {
   showExternalLinks: false,
   showCollectionButtons: false,
   showCreatorNames: true,
-  preloadPages: 0,
-  spaceThemeCompatibility: false,
   themePreset: defaultThemePreset,
   themeColors: defaultThemeColors,
 };
 
-const defaultZoom: ZoomState = {
-  grid_p: 180,
-  grid_l: 395,
-  hero: 420,
-  logo: 360,
-  icon: 140,
+type DensityModeState = {
+  desktop: AssetDensityState;
+  gamepad: AssetDensityState;
 };
 
-const gamepadDefaultZoom: ZoomState = {
-  ...defaultZoom,
-  grid_l: 315,
-};
-
-type ZoomModeState = {
-  desktop: ZoomState;
-  gamepad: ZoomState;
-};
-
-const ZOOM_STORAGE_KEY = 'steamgriddb:zoomByMode:v1';
+const DENSITY_STORAGE_KEY = 'steamgriddb:densityByMode:v2';
 const SETTINGS_STORAGE_KEY = 'steamgriddb:settings:v1';
 const FILTER_STORAGE_KEY = 'steamgriddb:filtersByType:v1';
 const LAST_APPID_STORAGE_KEY = 'steamgriddb:lastAppId:v1';
 
-const isZoomState = (value: unknown): value is ZoomState => {
-  if (!value || typeof value !== 'object') {
-    return false;
-  }
-
-  return tabs.every((tab) => typeof (value as Partial<ZoomState>)[tab] === 'number');
-};
-
-const loadZoomByMode = (): ZoomModeState => {
+const loadDensityByMode = (): DensityModeState => {
   const fallback = {
-    desktop: defaultZoom,
-    gamepad: gamepadDefaultZoom,
+    desktop: densityDefaults('desktop'),
+    gamepad: densityDefaults('gamepad'),
   };
 
   try {
-    const raw = window.localStorage.getItem(ZOOM_STORAGE_KEY);
+    const raw = window.localStorage.getItem(DENSITY_STORAGE_KEY);
     if (!raw) {
       return fallback;
     }
 
-    const saved = JSON.parse(raw) as Partial<ZoomModeState>;
+    const saved = JSON.parse(raw) as Partial<DensityModeState>;
     return {
-      desktop: isZoomState(saved.desktop) ? { ...defaultZoom, ...saved.desktop } : fallback.desktop,
-      gamepad: isZoomState(saved.gamepad) ? { ...gamepadDefaultZoom, ...saved.gamepad } : fallback.gamepad,
+      desktop: normalizeDensityState(saved.desktop, 'desktop'),
+      gamepad: normalizeDensityState(saved.gamepad, 'gamepad'),
     };
   } catch {
     return fallback;
@@ -389,6 +374,14 @@ const normalizeThemeColors = (colors: unknown): ThemeColorSettings => {
     sliderThumb: normalizeHexColor(saved.sliderThumb, defaultThemeColors.sliderThumb),
   };
 };
+
+const filterStateKey = (filters: FilterState) => [
+  filters.static,
+  filters.animated,
+  filters.adult,
+  filters.humor,
+  filters.epilepsy,
+].map((enabled) => enabled ? '1' : '0').join('');
 
 const normalizeThemePreset = (preset: unknown): ThemePresetKey => {
   const value = String(preset ?? '');
@@ -438,8 +431,6 @@ const normalizeSettings = (settings: Partial<PluginSettings>): PluginSettings =>
     showExternalLinks: typeof settings.showExternalLinks === 'boolean' ? settings.showExternalLinks : defaultSettings.showExternalLinks,
     showCollectionButtons: typeof settings.showCollectionButtons === 'boolean' ? settings.showCollectionButtons : defaultSettings.showCollectionButtons,
     showCreatorNames: typeof settings.showCreatorNames === 'boolean' ? settings.showCreatorNames : defaultSettings.showCreatorNames,
-    preloadPages: Math.max(0, Math.min(5, Number.isFinite(settings.preloadPages) ? Math.trunc(settings.preloadPages as number) : defaultSettings.preloadPages)),
-    spaceThemeCompatibility: typeof settings.spaceThemeCompatibility === 'boolean' ? settings.spaceThemeCompatibility : defaultSettings.spaceThemeCompatibility,
     themePreset: settings.themePreset === undefined ? themePresetFromColors(themeColors) : normalizeThemePreset(settings.themePreset),
     themeColors,
   };
@@ -654,10 +645,6 @@ const downloadAssetInBrowser = async (url: string): Promise<DownloadedAsset> => 
   };
 };
 
-export const assetGridStyle = (assetType: SGDBAssetType, zoom: number) => {
-  return { ['--asset-size' as string]: `${zoom}px` };
-};
-
 const themeColorRows: { key: keyof ThemeColorSettings; label: string }[] = [
   { key: 'background', label: 'Background' },
   { key: 'surfaceHover', label: 'Selected and hover surface' },
@@ -763,13 +750,6 @@ const SettingsView = ({
         <PanelSectionRow><ToggleField label="SteamGridDB link button" description="Show the external-link action on artwork." checked={settings.showExternalLinks} onChange={(showExternalLinks) => setSettings((current) => ({ ...current, showExternalLinks }))} /></PanelSectionRow>
         <PanelSectionRow><ToggleField label="Add to collection button" description="Show the collection action on artwork." checked={settings.showCollectionButtons} onChange={(showCollectionButtons) => setSettings((current) => ({ ...current, showCollectionButtons }))} /></PanelSectionRow>
         <PanelSectionRow><ToggleField label="Asset creator names" description="Display the uploader below each artwork item." checked={settings.showCreatorNames} onChange={(showCreatorNames) => setSettings((current) => ({ ...current, showCreatorNames }))} /></PanelSectionRow>
-        <PanelSectionRow>
-          <TextField label="Additional pages to preload" description="Load up to five extra result pages in advance." value={String(settings.preloadPages)} mustBeNumeric rangeMin={0} rangeMax={5} onChange={(event) => {
-            const preloadPages = Math.max(0, Math.min(5, Number.parseInt(event.currentTarget.value || '0', 10)));
-            setSettings((current) => ({ ...current, preloadPages }));
-          }} />
-        </PanelSectionRow>
-        <PanelSectionRow><ToggleField label="SpaceTheme compatibility" description="Apply layout adjustments intended for SpaceTheme." checked={settings.spaceThemeCompatibility} onChange={(spaceThemeCompatibility) => setSettings((current) => ({ ...current, spaceThemeCompatibility }))} /></PanelSectionRow>
       </PanelSection>
 
       <PanelSection title="APPEARANCE">
@@ -801,7 +781,7 @@ const MissingApiKeyView = ({ onRetry }: { onRetry: () => void }) => (
       <p>SteamGridDB cannot load artwork until a personal API key is configured.</p>
       <ol>
         <li>Select <strong>Get API key</strong>, sign in to SteamGridDB, and copy your key.</li>
-        <li>In Steam, open <strong>Settings → Millennium → Plugins → SteamGridDB</strong>.</li>
+        <li>In Steam, open <strong>Steam → Millennium Library Manager → SteamGridDB → API Key</strong>.</li>
         <li>Paste it into <strong>SteamGridDB API key</strong>, select <strong>Save Key</strong>, then return here.</li>
       </ol>
       <div className="sgdbApiKeyFallbackActions">
@@ -831,18 +811,25 @@ const SteamGridDBContent = ({
   const [pagesByType, setPagesByType] = useState<PageState>(() => emptyPages());
   const [loadingByType, setLoadingByType] = useState<LoadingState>(() => emptyLoading());
   const [endReachedByType, setEndReachedByType] = useState<EndState>(() => emptyEnd());
+  const [loadErrorByType, setLoadErrorByType] = useState<ErrorState>(() => emptyErrors());
   const [filtersByType, setFiltersByType] = useState<FilterStateByType>(() => loadFiltersByType());
-  const [zoomByMode, setZoomByMode] = useState<ZoomModeState>(() => loadZoomByMode());
+  const [densityByMode, setDensityByMode] = useState<DensityModeState>(() => loadDensityByMode());
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [applyingId, setApplyingId] = useState<number | null>(null);
   const [apiKeyRequired, setApiKeyRequired] = useState(false);
   const [uiMode, setUiMode] = useState<EUIMode>(EUIMode.Desktop);
   const [sgdbGameId, setSgdbGameId] = useState<number | null>(null);
   const appId = useMemo(() => Number.parseInt(appIdText, 10), [appIdText]);
+  const requestVersionByTypeRef = useRef<PageState>(emptyPages());
+  const activeRequestKeyByTypeRef = useRef<Partial<Record<SGDBAssetType, string>>>({});
+  const currentAppIdRef = useRef(appId);
+  const currentFiltersByTypeRef = useRef(filtersByType);
+  currentAppIdRef.current = appId;
+  currentFiltersByTypeRef.current = filtersByType;
   const hasAppId = Number.isFinite(appId) && appId > 0;
   const isGamepadUI = uiMode === EUIMode.GamePad;
-  const zoomModeKey = isGamepadUI ? 'gamepad' : 'desktop';
-  const zoomByType = zoomByMode[zoomModeKey];
+  const densityModeKey = isGamepadUI ? 'gamepad' : 'desktop';
+  const densityByType = densityByMode[densityModeKey];
   const filters = filtersByType[assetType] ?? defaultFilters;
   const rootStyle = {
     '--sgdb-bg': settings.themeColors.background,
@@ -858,8 +845,8 @@ const SteamGridDBContent = ({
   }, [settings]);
 
   useEffect(() => {
-    window.localStorage.setItem(ZOOM_STORAGE_KEY, JSON.stringify(zoomByMode));
-  }, [zoomByMode]);
+    window.localStorage.setItem(DENSITY_STORAGE_KEY, JSON.stringify(densityByMode));
+  }, [densityByMode]);
 
   useEffect(() => {
     window.localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(filtersByType));
@@ -871,16 +858,16 @@ const SteamGridDBContent = ({
     }
   }, [appId, hasAppId]);
 
-  const setZoomByType = useCallback<Dispatch<SetStateAction<ZoomState>>>((action) => {
-    setZoomByMode((current) => {
-      const currentZoom = current[zoomModeKey];
-      const nextZoom = typeof action === 'function' ? action(currentZoom) : action;
+  const setDensityByType = useCallback<Dispatch<SetStateAction<AssetDensityState>>>((action) => {
+    setDensityByMode((current) => {
+      const currentDensity = current[densityModeKey];
+      const nextDensity = typeof action === 'function' ? action(currentDensity) : action;
       return {
         ...current,
-        [zoomModeKey]: nextZoom,
+        [densityModeKey]: normalizeDensityState(nextDensity, densityModeKey),
       };
     });
-  }, [zoomModeKey]);
+  }, [densityModeKey]);
 
   const setFilters = useCallback<Dispatch<SetStateAction<FilterState>>>((action) => {
     setFiltersByType((current) => {
@@ -893,16 +880,31 @@ const SteamGridDBContent = ({
     });
   }, [assetType]);
 
+  const invalidateAssetRequests = useCallback((type?: SGDBAssetType) => {
+    const affectedTypes = type ? [type] : tabs;
+    affectedTypes.forEach((affectedType) => {
+      requestVersionByTypeRef.current[affectedType] += 1;
+      delete activeRequestKeyByTypeRef.current[affectedType];
+    });
+    setLoadingByType((current) => affectedTypes.reduce((next, affectedType) => ({
+      ...next,
+      [affectedType]: false,
+    }), current));
+  }, []);
+
   useEffect(() => {
     const nextAppId = normalizeAppIdText(initialAppId) ?? (allowAppIdFallback ? fallbackAppIdText() : null);
     if (nextAppId) {
+      invalidateAssetRequests();
       setAppIdText(nextAppId);
       setAssetsByType(emptyAssets());
       setPagesByType(emptyPages());
       setEndReachedByType(emptyEnd());
+      setLoadErrorByType(emptyErrors());
       setSgdbGameId(null);
+      setApiKeyRequired(false);
     }
-  }, [allowAppIdFallback, initialAppId]);
+  }, [allowAppIdFallback, initialAppId, invalidateAssetRequests]);
 
   useEffect(() => {
     if (initialAssetType) {
@@ -932,37 +934,55 @@ const SteamGridDBContent = ({
 
   const loadAssets = useCallback(async (type: SGDBAssetType, nextPage = 0, append = false) => {
     if (!Number.isFinite(appId) || loadingByType[type] || endReachedByType[type]) return;
+    const requestAppId = appId;
+    const requestFilters = { ...filters };
+    const requestFilterKey = filterStateKey(requestFilters);
+    const requestKey = `${requestAppId}:${nextPage}:${append ? 'append' : 'replace'}:${requestFilterKey}:${sgdbGameId ?? 'steam'}`;
+    if (activeRequestKeyByTypeRef.current[type] === requestKey) return;
+
+    requestVersionByTypeRef.current[type] += 1;
+    const requestVersion = requestVersionByTypeRef.current[type];
+    activeRequestKeyByTypeRef.current[type] = requestKey;
+    const isCurrentRequest = () => requestVersionByTypeRef.current[type] === requestVersion
+      && currentAppIdRef.current === requestAppId
+      && filterStateKey(currentFiltersByTypeRef.current[type] ?? defaultFilters) === requestFilterKey;
+
     if (!append) setApiKeyRequired(false);
+    setLoadErrorByType((current) => ({ ...current, [type]: null }));
     setLoadingByType((current) => ({ ...current, [type]: true }));
     try {
       const endpoint = ASSET_ENDPOINT[type];
-      const lastPageToLoad = nextPage === 0 && !append ? nextPage + settings.preloadPages : nextPage;
+      const lastPageToLoad = nextPage;
       let loadedAssets: SGDBAsset[] = [];
       let lastLoadedPage = nextPage;
       let reachedEnd = false;
       let resolvedGameId = sgdbGameId;
 
       for (let page = nextPage; page <= lastPageToLoad; page += 1) {
-        const query = buildAssetQuery(type, page, filters);
+        const query = buildAssetQuery(type, page, requestFilters);
         let result: SGDBAsset[];
         try {
-          result = await apiGet<SGDBAsset[]>(`/${endpoint}/${resolvedGameId ? 'game' : 'steam'}/${resolvedGameId ?? appId}?${query}`);
+          result = await apiGet<SGDBAsset[]>(`/${endpoint}/${resolvedGameId ? 'game' : 'steam'}/${resolvedGameId ?? requestAppId}?${query}`);
+          if (!isCurrentRequest()) return;
         } catch (err) {
+          if (!isCurrentRequest()) return;
           const message = err instanceof Error ? err.message : String(err);
           if (resolvedGameId || !/game not found/i.test(message)) {
             throw err;
           }
 
-          resolvedGameId = await resolveSteamGridDBGameId(appId);
+          resolvedGameId = await resolveSteamGridDBGameId(requestAppId);
+          if (!isCurrentRequest()) return;
           if (!resolvedGameId) {
             throw err;
           }
 
           setSgdbGameId(resolvedGameId);
           result = await apiGet<SGDBAsset[]>(`/${endpoint}/game/${resolvedGameId}?${query}`);
+          if (!isCurrentRequest()) return;
         }
 
-        loadedAssets = [...loadedAssets, ...filterReturnedAssets(result, filters)];
+        loadedAssets = [...loadedAssets, ...filterReturnedAssets(result, requestFilters)];
         lastLoadedPage = page;
         if (result.length === 0) {
           reachedEnd = true;
@@ -970,49 +990,58 @@ const SteamGridDBContent = ({
         }
       }
 
+      if (!isCurrentRequest()) return;
       setAssetsByType((current) => ({ ...current, [type]: append ? [...current[type], ...loadedAssets] : loadedAssets }));
       setPagesByType((current) => ({ ...current, [type]: lastLoadedPage }));
       setEndReachedByType((current) => ({ ...current, [type]: reachedEnd }));
     } catch (err) {
-      setEndReachedByType((current) => ({ ...current, [type]: true }));
+      if (!isCurrentRequest()) return;
       const message = err instanceof Error ? err.message : String(err);
+      setLoadErrorByType((current) => ({ ...current, [type]: message }));
       if (/api key is required/i.test(message)) {
         setApiKeyRequired(true);
       } else {
         notice('SteamGridDB Assets Failed', message);
       }
     } finally {
-      setLoadingByType((current) => ({ ...current, [type]: false }));
+      if (requestVersionByTypeRef.current[type] === requestVersion) {
+        delete activeRequestKeyByTypeRef.current[type];
+        setLoadingByType((current) => ({ ...current, [type]: false }));
+      }
     }
-  }, [appId, endReachedByType, filters, loadingByType, settings.preloadPages, sgdbGameId]);
+  }, [appId, endReachedByType, filters, loadingByType, sgdbGameId]);
 
   useEffect(() => {
     if (!Number.isFinite(appId)) return;
-    if (assetsByType[assetType].length > 0 || loadingByType[assetType] || endReachedByType[assetType]) return;
+    if (assetsByType[assetType].length > 0 || loadingByType[assetType] || endReachedByType[assetType] || loadErrorByType[assetType]) return;
     void loadAssets(assetType, 0, false);
-  }, [appId, assetType, assetsByType, endReachedByType, loadAssets, loadingByType]);
-
-  useEffect(() => {
-    if (isGamepadUI || !Number.isFinite(appId)) return;
-    if (settings.preloadPages > 0) return;
-    if (pagesByType[assetType] !== 0 || assetsByType[assetType].length < 45 || loadingByType[assetType] || endReachedByType[assetType]) return;
-    void loadAssets(assetType, 1, true);
-  }, [appId, assetType, assetsByType, endReachedByType, isGamepadUI, loadAssets, loadingByType, pagesByType, settings.preloadPages]);
+  }, [appId, assetType, assetsByType, endReachedByType, loadAssets, loadErrorByType, loadingByType]);
 
   const resetCurrentTab = useCallback(() => {
+    invalidateAssetRequests(assetType);
     setAssetsByType((current) => ({ ...current, [assetType]: [] }));
     setPagesByType((current) => ({ ...current, [assetType]: 0 }));
     setEndReachedByType((current) => ({ ...current, [assetType]: false }));
-  }, [assetType]);
+    setLoadErrorByType((current) => ({ ...current, [assetType]: null }));
+  }, [assetType, invalidateAssetRequests]);
 
   const retryAfterApiKey = useCallback(() => {
+    invalidateAssetRequests(assetType);
     setApiKeyRequired(false);
     setAssetsByType((current) => ({ ...current, [assetType]: [] }));
     setPagesByType((current) => ({ ...current, [assetType]: 0 }));
     setEndReachedByType((current) => ({ ...current, [assetType]: false }));
-  }, [assetType]);
+    setLoadErrorByType((current) => ({ ...current, [assetType]: null }));
+  }, [assetType, invalidateAssetRequests]);
+
+  const retryCurrentLoad = useCallback(() => {
+    setLoadErrorByType((current) => ({ ...current, [assetType]: null }));
+    const append = assetsByType[assetType].length > 0;
+    void loadAssets(assetType, append ? pagesByType[assetType] + 1 : 0, append);
+  }, [assetType, assetsByType, loadAssets, pagesByType]);
 
   const toggleFilter = (key: keyof FilterState) => {
+    invalidateAssetRequests(assetType);
     setFilters((current) => {
       const next = { ...current, [key]: !current[key] };
       if (!next.static && !next.animated) {
@@ -1158,11 +1187,11 @@ const SteamGridDBContent = ({
     pagesByType,
     loadingByType,
     endReachedByType,
+    loadErrorByType,
     filters,
     toggleFilter,
-    zoomByType,
-    zoomDefaults: isGamepadUI ? gamepadDefaultZoom : defaultZoom,
-    setZoomByType,
+    densityByType,
+    setDensityByType,
     filtersOpen,
     setFiltersOpen,
     applyingId,
@@ -1174,12 +1203,13 @@ const SteamGridDBContent = ({
     showCreatorNames: settings.showCreatorNames,
     loadAssets,
     resetCurrentTab,
+    retryCurrentLoad,
     resetArtwork,
     isGamepadUI,
   };
 
   return (
-    <div className={`sgdbRoot sgdbGamepad ${isGamepadUI ? 'sgdbBigPicture' : 'sgdbDesktopToolbar'} ${settings.spaceThemeCompatibility ? 'sgdbSpaceThemeCompat' : ''} ${popout ? 'sgdbPopoutContent' : ''} ${hasAppId ? '' : 'sgdbSettingsRoot'}`} id="sgdb-wrap" style={rootStyle}>
+    <div className={`sgdbRoot sgdbGamepad ${isGamepadUI ? 'sgdbBigPicture' : 'sgdbDesktopToolbar'} ${popout ? 'sgdbPopoutContent' : ''} ${hasAppId ? '' : 'sgdbSettingsRoot'}`} id="sgdb-wrap" style={rootStyle}>
       <style>{styles}</style>
       {hasAppId
         ? apiKeyRequired
@@ -1208,7 +1238,17 @@ const captureSteamDesktopWindow = (popup: any) => {
   }
 };
 
-Millennium?.AddWindowCreateHook?.(captureSteamDesktopWindow);
+const registerSteamWindowHook = () => {
+  window.__SGDB_WINDOW_HOOK__ = captureSteamDesktopWindow;
+  if (window.__SGDB_WINDOW_HOOK_REGISTERED__ || !Millennium?.AddWindowCreateHook) {
+    return;
+  }
+
+  Millennium.AddWindowCreateHook((popup: any) => window.__SGDB_WINDOW_HOOK__?.(popup));
+  window.__SGDB_WINDOW_HOOK_REGISTERED__ = true;
+};
+
+registerSteamWindowHook();
 
 const installResizablePopupPatch = () => {
   window.__SGDB_POPUP_CREATE_PATCH__?.unpatch?.();
@@ -1374,40 +1414,44 @@ const patchLibraryContextMenu = () => {
     return { unpatch: () => undefined };
   }
 
-  const patches: { outer?: any; inner?: any; unpatch: () => void } = { unpatch: () => undefined };
+  const findCurrentAppId = (tree?: any) => {
+    const foundApp = findInTree(tree, (node) => node?.app?.appid, { walkable: ['props', 'children', '_owner', 'pendingProps'] });
+    if (foundApp?.app?.appid) {
+      return foundApp.app.appid;
+    }
+
+    const foundOverview = findInTree(tree, (node) => node?.overview?.appid, { walkable: ['props', 'children', '_owner', 'pendingProps'] });
+    return foundOverview?.overview?.appid ?? 0;
+  };
+
+  const patches: { outer?: any; inner?: any; nested: any[]; unpatch: () => void } = {
+    nested: [],
+    unpatch: () => undefined,
+  };
+  const patchedMenuPrototypes = new WeakSet<object>();
   patches.outer = afterPatch(LibraryContextMenu.prototype, 'render', (_args: any[], component: any) => {
-    const findCurrentAppId = (tree?: any) => {
-      if (component?._owner?.pendingProps?.overview?.appid) {
-        return component._owner.pendingProps.overview.appid;
-      }
-
-      const foundApp = findInTree(component?.props?.children, (node) => node?.app?.appid, { walkable: ['props', 'children'] });
-      if (foundApp?.app?.appid) {
-        return foundApp.app.appid;
-      }
-
-      const foundTreeApp = findInTree(tree, (node) => node?.app?.appid || node?.overview?.appid, { walkable: ['props', 'children', '_owner', 'pendingProps'] });
-      return foundTreeApp?.app?.appid ?? foundTreeApp?.overview?.appid ?? 0;
-    };
-
     if (!patches.inner) {
       patches.inner = afterPatch(component, 'type', (_typeArgs: any[], ret: any) => {
-        if (ret?.type?.prototype?.render) {
-          afterPatch(ret.type.prototype, 'render', (_renderArgs: any[], renderRet: any) => {
+        const prototype = ret?.type?.prototype;
+        if (prototype?.render && !patchedMenuPrototypes.has(prototype)) {
+          patchedMenuPrototypes.add(prototype);
+          patches.nested.push(afterPatch(prototype, 'render', (_renderArgs: any[], renderRet: any) => {
             const menuItems = renderRet?.props?.children?.[0];
             if (isOpeningAppContextMenu(menuItems)) {
               patchMenuItems(menuItems, findCurrentAppId(renderRet));
             }
             return renderRet;
-          });
+          }));
 
-          afterPatch(ret.type.prototype, 'shouldComponentUpdate', ([nextProps]: any[], shouldUpdate: any) => {
-            const menuItems = nextProps?.children;
-            if (isOpeningAppContextMenu(menuItems)) {
-              patchMenuItems(menuItems, findCurrentAppId(nextProps));
-            }
-            return shouldUpdate;
-          });
+          if (typeof prototype.shouldComponentUpdate === 'function') {
+            patches.nested.push(afterPatch(prototype, 'shouldComponentUpdate', ([nextProps]: any[], shouldUpdate: any) => {
+              const menuItems = nextProps?.children;
+              if (isOpeningAppContextMenu(menuItems)) {
+                patchMenuItems(menuItems, findCurrentAppId(nextProps));
+              }
+              return shouldUpdate;
+            }));
+          }
         }
 
         return ret;
@@ -1420,6 +1464,7 @@ const patchLibraryContextMenu = () => {
   });
 
   patches.unpatch = () => {
+    patches.nested.splice(0).reverse().forEach((patch) => patch?.unpatch?.());
     patches.outer?.unpatch?.();
     patches.inner?.unpatch?.();
   };
@@ -1436,6 +1481,8 @@ export default definePlugin(() => ({
     delete window.__SGDB_POPUP_CREATE_PATCH__;
     window.__SGDB_CONTEXT_MENU_PATCH__?.unpatch?.();
     delete window.__SGDB_CONTEXT_MENU_PATCH__;
+    delete window.__SGDB_WINDOW_HOOK__;
+    steamDesktopOwnerWindow = null;
   },
 }));
 
@@ -1443,6 +1490,8 @@ declare global {
   interface Window {
     __SGDB_CONTEXT_MENU_PATCH__?: { unpatch?: () => void };
     __SGDB_POPUP_CREATE_PATCH__?: { unpatch?: () => void };
+    __SGDB_WINDOW_HOOK__?: (popup: any) => void;
+    __SGDB_WINDOW_HOOK_REGISTERED__?: boolean;
   }
 }
 
@@ -1488,7 +1537,7 @@ const styles = `
   box-sizing: border-box;
   overscroll-behavior: contain;
   box-shadow: 0 calc(-1 * var(--basicui-header-height, 40px)) 0 var(--sgdb-bg);
-  --asset-size: 120px;
+  --asset-columns: 4;
 }
 
 .sgdbRoot::before {
@@ -1705,10 +1754,6 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 
 .sgdbPopoutContent .sgdbManualTabs {
   position: relative;
-}
-
-.sgdbSpaceThemeCompat.sgdbPopoutContent .sgdbManualTabs {
-  position: relative;
   z-index: 3;
   width: calc(100% - 52px);
   min-height: 64px;
@@ -1717,7 +1762,7 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   -webkit-app-region: drag;
 }
 
-.sgdbSpaceThemeCompat.sgdbPopoutContent .sgdbManualTabs button {
+.sgdbPopoutContent .sgdbManualTabs button {
   position: relative;
   z-index: 4;
   -webkit-app-region: no-drag;
@@ -2569,9 +2614,9 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 32px;
+  gap: clamp(16px, 2vw, 32px);
   min-height: 50px;
-  padding: 0 46px;
+  padding: 0 clamp(18px, 3vw, 46px);
   background: transparent;
   border: 0;
 }
@@ -2735,7 +2780,27 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 
 .sgdbSliderWithMarks {
   position: relative;
+  width: 100%;
   min-width: 0;
+}
+
+.sgdbDensityControl {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: clamp(10px, 1.3vw, 18px);
+  width: 100%;
+  min-width: 0;
+}
+
+.sgdbDensityValue {
+  min-width: 68px;
+  color: var(--sgdb-text-muted);
+  font-size: clamp(11px, 0.8vw, 13px);
+  font-weight: 700;
+  letter-spacing: 0.25px;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .sgdbGamepad .sgdb-asset-toolbar .size-slider {
@@ -2935,11 +3000,12 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 
 .sgdbGrid {
   display: grid;
-  padding: 10px 42px max(42px, var(--gamepadui-current-footer-height, 34px));
-  row-gap: 1.22em;
-  column-gap: 0.95em;
+  grid-template-columns: repeat(var(--asset-columns, 4), minmax(0, 1fr));
+  padding: 10px clamp(12px, 2vw, 32px) max(42px, var(--gamepadui-current-footer-height, 34px));
+  row-gap: clamp(14px, 1.7vw, 28px);
+  column-gap: clamp(12px, 1.6vw, 28px);
   width: 100%;
-  justify-content: space-evenly;
+  justify-content: stretch;
   grid-auto-flow: dense;
   box-sizing: border-box;
 }
@@ -2949,44 +3015,30 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 }
 
 .sgdbDesktopToolbar .sgdbGrid {
-  justify-content: center;
-  padding: 14px 32px var(--gamepadui-current-footer-height, 34px);
-  row-gap: 32px;
-  column-gap: clamp(28px, 2.35vw, 48px);
+  justify-content: stretch;
+  padding: 14px clamp(14px, 2vw, 32px) var(--gamepadui-current-footer-height, 34px);
+  row-gap: clamp(16px, 1.8vw, 30px);
+  column-gap: clamp(14px, 1.6vw, 28px);
 }
 
 .sgdbPopoutContent .sgdbGrid {
-  padding-right: 32px;
+  padding-right: clamp(14px, 2vw, 32px);
   padding-bottom: 18px;
-  padding-left: 32px;
+  padding-left: clamp(14px, 2vw, 32px);
 }
 
 .sgdbPopoutContent .sgdbMoreButton {
   margin-bottom: 12px;
 }
 
-.sgdbGrid.grid_p {
-  grid-template-columns: repeat(auto-fill, minmax(min(var(--asset-size, 150px), 100%), var(--asset-size, 150px)));
-}
-
-.sgdbGrid.grid_l {
-  grid-template-columns: repeat(auto-fill, minmax(min(var(--asset-size, 220px), 100%), var(--asset-size, 220px)));
-}
-
-.sgdbGrid.hero,
-.sgdbGrid.logo {
-  grid-template-columns: repeat(auto-fill, minmax(min(var(--asset-size, 320px), 100%), var(--asset-size, 320px)));
-}
-
-.sgdbGrid.icon {
-  grid-template-columns: repeat(auto-fill, minmax(min(var(--asset-size, 120px), 100%), var(--asset-size, 120px)));
-}
-
 .asset-box-wrap {
   display: flex;
-  align-items: center;
+  align-content: flex-start;
+  align-items: flex-start;
   flex-wrap: wrap;
   position: relative;
+  width: 100%;
+  min-width: 0;
   perspective: 900px;
 }
 
@@ -3004,6 +3056,21 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   transition: outline-color ease-in-out 160ms, transform ease-out 160ms, box-shadow ease-out 160ms;
 }
 
+.image-wrap.sgdbAsset.type-grid_p {
+  padding-bottom: 0 !important;
+  aspect-ratio: 2 / 3;
+}
+
+.image-wrap.sgdbAsset.type-grid_l {
+  padding-bottom: 0 !important;
+  aspect-ratio: 92 / 43;
+}
+
+.image-wrap.sgdbAsset.type-hero {
+  padding-bottom: 0 !important;
+  aspect-ratio: 96 / 31;
+}
+
 .image-wrap.sgdbAsset.type-logo,
 .image-wrap.sgdbAsset.type-icon {
   box-sizing: border-box;
@@ -3013,7 +3080,6 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 
 .image-wrap.sgdbAsset.type-logo {
   padding-bottom: 0 !important;
-  height: auto;
   aspect-ratio: 650 / 248;
 }
 
@@ -3158,7 +3224,7 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   max-width: 100%;
   max-height: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   object-position: center center;
   display: block;
   z-index: 1;
@@ -3167,6 +3233,7 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 
 .sgdbMediaBlur {
   z-index: 0;
+  object-fit: cover;
   filter: saturate(1.8) blur(18px);
   transform: scale(1.18);
   opacity: 0.32;
@@ -3194,6 +3261,10 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   width: 100%;
   min-height: 96px;
   color: var(--sgdb-text-muted);
+}
+
+.sgdbGrid > .sgdbEmpty {
+  grid-column: 1 / -1;
 }
 
 .author {
@@ -3449,10 +3520,10 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 32px;
+  gap: clamp(16px, 2vw, 32px);
   justify-content: stretch;
   min-height: 50px;
-  padding: 0 46px;
+  padding: 0 clamp(18px, 3vw, 46px);
   background: transparent;
   border: 0;
 }

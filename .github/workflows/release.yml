@@ -43,9 +43,6 @@ jobs:
           mkdir -p release/SteamGridDB
           cp plugin.json package.json pnpm-lock.yaml README.md tsconfig.json release/SteamGridDB/
           cp -R backend frontend .millennium release/SteamGridDB/
-          if [ -f settings.json ]; then
-            cp settings.json release/SteamGridDB/
-          fi
           cd release
           zip -r SteamGridDB-Millennium.zip SteamGridDB
 

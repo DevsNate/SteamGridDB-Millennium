@@ -97,9 +97,10 @@ local function run_powershell(script)
     end
 
     local command = 'powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' .. script_path .. '"'
-    local output, status = utils.exec(command)
-    if not output then
-        logger:error("PowerShell command failed: " .. tostring(status))
+    local exec_ok, output, status = pcall(utils.exec, command)
+    os.remove(script_path)
+    if not exec_ok or not output or status ~= 0 then
+        logger:error("PowerShell command failed: " .. tostring(exec_ok and status or output))
         return nil
     end
 
@@ -207,17 +208,20 @@ function download_as_base64(url)
         "$wc.Headers.Add('User-Agent', " .. ps_quote(USER_AGENT) .. ")",
         "$bytes = $wc.DownloadData(" .. ps_quote(url) .. ")",
         "[System.IO.File]::WriteAllText(" .. ps_quote(output_path) .. ", [Convert]::ToBase64String($bytes))",
+        "$wc.Dispose()",
         "Write-Output 'ok'"
     }, "; ")
 
     local result = run_powershell(script)
     if result ~= "ok" then
+        os.remove(output_path)
         logger:error("Image download/base64 conversion failed")
         return false
     end
 
     local handle = io.open(output_path, "rb")
     if not handle then
+        os.remove(output_path)
         logger:error("Could not read base64 output file")
         return false
     end
@@ -294,16 +298,54 @@ function set_steam_icon_from_url(appid, url, extension)
         "  if ($data.Length -ge 4 -and $data[0] -eq 0x00 -and $data[1] -eq 0x00 -and $data[2] -eq 0x01 -and $data[3] -eq 0x00) { return 'ico' }",
         "  throw 'Downloaded icon is not PNG, JPEG, or ICO.'",
         "}",
+        "function Get-BestIcoFrameBytes($data) {",
+        "  if ($data.Length -lt 22 -or [BitConverter]::ToUInt16($data, 0) -ne 0 -or [BitConverter]::ToUInt16($data, 2) -ne 1) { throw 'Invalid ICO header.' }",
+        "  $count = [BitConverter]::ToUInt16($data, 4)",
+        "  if ($count -lt 1 -or (6 + (16 * $count)) -gt $data.Length) { throw 'Invalid ICO directory.' }",
+        "  $bestFrame = $null",
+        "  $bestArea = -1",
+        "  $bestBits = -1",
+        "  for ($index = 0; $index -lt $count; $index++) {",
+        "    $entry = 6 + (16 * $index)",
+        "    $width = if ($data[$entry] -eq 0) { 256 } else { [int]$data[$entry] }",
+        "    $height = if ($data[$entry + 1] -eq 0) { 256 } else { [int]$data[$entry + 1] }",
+        "    $bits = [BitConverter]::ToUInt16($data, $entry + 6)",
+        "    $size = [BitConverter]::ToUInt32($data, $entry + 8)",
+        "    $offset = [BitConverter]::ToUInt32($data, $entry + 12)",
+        "    if ($size -lt 1 -or $offset -gt $data.Length -or $size -gt ($data.Length - $offset)) { continue }",
+        "    $area = $width * $height",
+        "    if ($area -gt $bestArea -or ($area -eq $bestArea -and $bits -gt $bestBits)) {",
+        "      $frame = [byte[]]::new([int]$size)",
+        "      [Buffer]::BlockCopy($data, [int]$offset, $frame, 0, [int]$size)",
+        "      $bestFrame = $frame",
+        "      $bestArea = $area",
+        "      $bestBits = $bits",
+        "    }",
+        "  }",
+        "  if ($null -eq $bestFrame) { throw 'ICO contains no valid image frames.' }",
+        "  return ,$bestFrame",
+        "}",
         "function Get-ImageFromBytes($data) {",
         "  $sourceExtension = Get-ImageExtension $data",
-        "  $stream = [System.IO.MemoryStream]::new($data, 0, $data.Length, $false, $true)",
         "  if ($sourceExtension -eq 'ico') {",
-        "    $icon = [System.Drawing.Icon]::new($stream)",
+        "    $frameBytes = [byte[]](Get-BestIcoFrameBytes $data)",
+        "    $isPngFrame = $frameBytes.Length -ge 8 -and $frameBytes[0] -eq 0x89 -and $frameBytes[1] -eq 0x50 -and $frameBytes[2] -eq 0x4E -and $frameBytes[3] -eq 0x47 -and $frameBytes[4] -eq 0x0D -and $frameBytes[5] -eq 0x0A -and $frameBytes[6] -eq 0x1A -and $frameBytes[7] -eq 0x0A",
+        "    if ($isPngFrame) {",
+        "      $frameStream = [System.IO.MemoryStream]::new($frameBytes, 0, $frameBytes.Length, $false, $true)",
+        "      $frameImage = [System.Drawing.Image]::FromStream($frameStream, $true, $true)",
+        "      $bitmap = [System.Drawing.Bitmap]::new($frameImage)",
+        "      $frameImage.Dispose()",
+        "      $frameStream.Dispose()",
+        "      return $bitmap",
+        "    }",
+        "    $iconStream = [System.IO.MemoryStream]::new($data, 0, $data.Length, $false, $true)",
+        "    $icon = [System.Drawing.Icon]::new($iconStream, 256, 256)",
         "    $bitmap = $icon.ToBitmap()",
         "    $icon.Dispose()",
-        "    $stream.Dispose()",
+        "    $iconStream.Dispose()",
         "    return $bitmap",
         "  }",
+        "  $stream = [System.IO.MemoryStream]::new($data, 0, $data.Length, $false, $true)",
         "  $image = [System.Drawing.Image]::FromStream($stream, $true, $true)",
         "  $bitmap = [System.Drawing.Bitmap]::new($image)",
         "  $image.Dispose()",
@@ -364,21 +406,22 @@ function set_steam_icon_from_url(appid, url, extension)
         "  return $sourceBytes",
         "}",
         "$downloadExtension = Get-ImageExtension $bytes",
-        "$fileName = $baseName + '.' + $downloadExtension",
+        "$fileName = $baseName + '.png'",
         "$cacheTarget = Join-Path $cacheDir $fileName",
         "$sourceImage = Get-ImageFromBytes $bytes",
+        "$normalizedPngBytes = Convert-ToPngBytes $sourceImage",
         "$gridDirs = Get-ChildItem -LiteralPath $userdata -Directory | ForEach-Object { Join-Path $_.FullName 'config\\grid' }",
         "$written = @()",
         "foreach ($gridDir in $gridDirs) {",
         "  if (!(Test-Path -LiteralPath $gridDir)) { New-Item -ItemType Directory -Force -Path $gridDir | Out-Null }",
         "  Get-ChildItem -LiteralPath $gridDir -File -ErrorAction SilentlyContinue | Where-Object { $_.BaseName -eq $baseName } | Remove-Item -Force -ErrorAction SilentlyContinue",
         "  $target = Join-Path $gridDir $fileName",
-        "  [System.IO.File]::WriteAllBytes($target, $bytes)",
+        "  [System.IO.File]::WriteAllBytes($target, $normalizedPngBytes)",
         "  $written += $target",
         "}",
         "if (Test-Path -LiteralPath $cacheDir) {",
         "  Get-ChildItem -LiteralPath $cacheDir -File -ErrorAction SilentlyContinue | Where-Object { $_.BaseName -eq $baseName } | Remove-Item -Force -ErrorAction SilentlyContinue",
-        "  [System.IO.File]::WriteAllBytes($cacheTarget, (Convert-IconBytesForPath $cacheTarget $bytes $sourceImage))",
+        "  [System.IO.File]::WriteAllBytes($cacheTarget, $normalizedPngBytes)",
         "  $written += $cacheTarget",
         "}",
         "if (Test-Path -LiteralPath $appCacheDir) {",
