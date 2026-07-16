@@ -1075,6 +1075,7 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   z-index: 10008;
   background: var(--sgdb-bg);
   opacity: 1;
+  pointer-events: none;
   transition: opacity 250ms ease-out, z-index 0s;
 }
 
