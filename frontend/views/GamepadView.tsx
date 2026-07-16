@@ -1,4 +1,4 @@
-import { DialogButton, Dropdown, Focusable, GamepadButton, Spinner } from '@steambrew/client';
+import { DialogButton, Dropdown, Focusable, GamepadButton, Spinner, TextField } from '@steambrew/client';
 import { Dispatch, SetStateAction, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { columnOptions } from '../layout';
 import type { AssetDensityState } from '../layout';
@@ -786,7 +786,67 @@ export const GamepadView = ({
       </div>
     </div>
   );
-  const appIdControls = (
+  const handleLookupAppIdKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      confirmLookupAppId();
+    } else if (event.key === 'Escape') {
+      setLookupAppIdDraft(lookupAppIdText);
+    }
+  };
+  const appIdControls = isGamepadUI ? (
+    <Focusable className="sgdbAppIdControls" flow-children="row" onGamepadFocus={revealToolbar}>
+      <TextField
+        className="sgdbAppIdInput sgdbAppIdGamepadInput"
+        inputMode="numeric"
+        aria-label="SteamGridDB lookup App ID"
+        tooltip="SteamGridDB lookup App ID"
+        value={lookupAppIdDraft}
+        mustBeNumeric
+        bShowClearAction={false}
+        bAlwaysShowClearAction={false}
+        onChange={(event) => setLookupAppIdDraft(event.currentTarget.value.replace(/\D/g, ''))}
+        onKeyDown={handleLookupAppIdKeyDown}
+        onFocus={revealToolbar}
+      />
+      {canResetLookupAppId ? (
+        <Focusable
+          className="sgdbAppIdAction sgdbTextPill"
+          aria-label="Reset lookup App ID"
+          title="Reset lookup App ID"
+          onActivate={resetLookupAppId}
+          onClick={resetLookupAppId}
+          onGamepadFocus={revealToolbar}
+          onOKActionDescription="Reset App ID"
+          role="button"
+        >
+          <ResetIdIcon />
+        </Focusable>
+      ) : (
+        <div className="sgdbAppIdAction sgdbTextPill" aria-label="Reset lookup App ID" aria-disabled="true" role="button">
+          <ResetIdIcon />
+        </div>
+      )}
+      {canConfirmLookupAppId ? (
+        <Focusable
+          className="sgdbAppIdAction sgdbTextPill"
+          aria-label="Confirm lookup App ID"
+          title="Confirm lookup App ID"
+          onActivate={confirmLookupAppId}
+          onClick={confirmLookupAppId}
+          onGamepadFocus={revealToolbar}
+          onOKActionDescription="Confirm App ID"
+          role="button"
+        >
+          <ConfirmIdIcon />
+        </Focusable>
+      ) : (
+        <div className="sgdbAppIdAction sgdbTextPill" aria-label="Confirm lookup App ID" aria-disabled="true" role="button">
+          <ConfirmIdIcon />
+        </div>
+      )}
+    </Focusable>
+  ) : (
     <div className="sgdbAppIdControls">
       <input
         className="sgdbAppIdInput"
@@ -796,14 +856,7 @@ export const GamepadView = ({
         aria-label="SteamGridDB lookup App ID"
         value={lookupAppIdDraft}
         onChange={(event) => setLookupAppIdDraft(event.currentTarget.value.replace(/\D/g, ''))}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter') {
-            event.preventDefault();
-            confirmLookupAppId();
-          } else if (event.key === 'Escape') {
-            setLookupAppIdDraft(lookupAppIdText);
-          }
-        }}
+        onKeyDown={handleLookupAppIdKeyDown}
       />
       <button
         className="sgdbAppIdAction sgdbTextPill"

@@ -2209,7 +2209,8 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   background: var(--sgdb-surface-hover);
 }
 
-.sgdbAppIdAction:disabled {
+.sgdbAppIdAction:disabled,
+.sgdbAppIdAction[aria-disabled="true"] {
   opacity: 0.36;
   cursor: default;
 }
