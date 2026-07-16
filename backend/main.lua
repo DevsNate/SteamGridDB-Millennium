@@ -201,45 +201,92 @@ end
 
 function download_as_base64(url)
     local temp_dir = utils.getenv("TEMP") or utils.getenv("TMP") or utils.get_backend_path()
-    local output_path = fs.join(temp_dir, "steamgriddb-millennium-asset-" .. utils.uuid() .. ".b64")
-    local script = table.concat({
-        "$ProgressPreference = 'SilentlyContinue'",
-        "$wc = [System.Net.WebClient]::new()",
-        "$wc.Headers.Add('User-Agent', " .. ps_quote(USER_AGENT) .. ")",
-        "$bytes = $wc.DownloadData(" .. ps_quote(url) .. ")",
-        "[System.IO.File]::WriteAllText(" .. ps_quote(output_path) .. ", [Convert]::ToBase64String($bytes))",
-        "$wc.Dispose()",
-        "Write-Output 'ok'"
-    }, "; ")
-
-    local result = run_powershell(script)
-    if result ~= "ok" then
-        os.remove(output_path)
-        logger:error("Image download/base64 conversion failed")
+    local output_path = fs.join(temp_dir, "steamgriddb-millennium-asset-" .. utils.uuid() .. ".bin")
+    url = tostring(url or "")
+    if not string.match(url, "^https?://") then
+        logger:error("Native image download failed: invalid URL: " .. url)
         return false
     end
 
-    local handle = io.open(output_path, "rb")
-    if not handle then
+    local call_ok, result, download_err = pcall(http.download, url, output_path, {
+        timeout = 30,
+        follow_redirects = true,
+        verify_ssl = true,
+        user_agent = USER_AGENT,
+    })
+    if not call_ok or not result or not result.success or (result.status and (result.status < 200 or result.status >= 300)) then
         os.remove(output_path)
-        logger:error("Could not read base64 output file")
+        logger:error("Native image download failed: " .. tostring(call_ok and (download_err or (result and result.status)) or result))
         return false
     end
 
-    local encoded = handle:read("*a")
-    handle:close()
+    local bytes, read_err = utils.read_file(output_path)
     os.remove(output_path)
-
-    if not encoded or encoded == "" then
-        logger:error("Base64 output file was empty")
+    if not bytes or bytes == "" then
+        logger:error("Native image download produced no readable data: " .. tostring(read_err))
         return false
     end
 
+    local encoded = utils.base64_encode(bytes)
+    if not encoded or encoded == "" then
+        logger:error("Native image Base64 conversion failed")
+        return false
+    end
+
+    logger:info("Native artwork download completed: " .. tostring(#bytes) .. " bytes")
     return encoded
 end
 
 local function steam_library_cache()
     return fs.join(millennium.steam_path(), "appcache", "librarycache")
+end
+
+local function steam_account_id_from_steam_id64(steam_id)
+    steam_id = tostring(steam_id or "")
+    if not string.match(steam_id, "^%d+$") then
+        return nil
+    end
+
+    local account_id = 0
+    for index = 1, #steam_id do
+        local digit = tonumber(string.sub(steam_id, index, index))
+        account_id = ((account_id * 10) + digit) % 4294967296
+    end
+    return tostring(math.floor(account_id))
+end
+
+local function resolve_active_grid_dir()
+    local steam_path = millennium.steam_path()
+    local login_users_path = fs.join(steam_path, "config", "loginusers.vdf")
+    local login_users, read_err = utils.read_file(login_users_path)
+    if not login_users or login_users == "" then
+        logger:error("Could not read Steam loginusers.vdf: " .. tostring(read_err))
+        return nil
+    end
+
+    for steam_id, user_block in string.gmatch(login_users, '"(%d+)"%s*(%b{})') do
+        if string.match(user_block, '"MostRecent"%s*"1"') then
+            local account_id = steam_account_id_from_steam_id64(steam_id)
+            local userdata_dir = account_id and fs.join(steam_path, "userdata", account_id) or nil
+            if not userdata_dir or not fs.is_directory(userdata_dir) then
+                logger:error("Active Steam userdata folder was not found for account " .. tostring(account_id))
+                return nil
+            end
+
+            local grid_dir = fs.join(userdata_dir, "config", "grid")
+            if not fs.exists(grid_dir) then
+                local created, create_err = fs.create_directories(grid_dir)
+                if not created and not fs.is_directory(grid_dir) then
+                    logger:error("Could not create active Steam grid folder: " .. tostring(create_err))
+                    return nil
+                end
+            end
+            return grid_dir, account_id
+        end
+    end
+
+    logger:error("Could not identify the active Steam account from loginusers.vdf")
+    return nil
 end
 
 function set_steam_icon_from_url(appid, url, extension)
@@ -534,6 +581,11 @@ function set_animated_artwork_from_url(appid, asset_type, url, extension)
         extension = tostring(extension):lower()
     end
 
+    if not string.match(url, "^https?://") then
+        logger:error("Animated artwork native download failed: invalid URL: " .. url)
+        return false
+    end
+
     -- SGDBoop intentionally stores WebP payloads with a .png filename because
     -- Steam ignores custom artwork files with a .webp extension.
     local file_extension = extension
@@ -541,45 +593,57 @@ function set_animated_artwork_from_url(appid, asset_type, url, extension)
         file_extension = "png"
     end
 
-    local steam_path = millennium.steam_path()
-    local userdata_path = fs.join(steam_path, "userdata")
-    if not fs.exists(userdata_path) then
-        logger:error("Steam userdata folder was not found: " .. tostring(userdata_path))
+    local grid_dir, account_id = resolve_active_grid_dir()
+    if not grid_dir then
         return false
     end
 
     local base_name = tostring(appid) .. suffix
     local file_name = base_name .. "." .. file_extension
-    local script = table.concat({
-        "$ProgressPreference = 'SilentlyContinue'",
-        "$ErrorActionPreference = 'Stop'",
-        "$userdata = " .. ps_quote(userdata_path),
-        "$url = " .. ps_quote(url),
-        "$fileName = " .. ps_quote(file_name),
-        "$baseName = " .. ps_quote(base_name),
-        "$wc = [System.Net.WebClient]::new()",
-        "$wc.Headers.Add('User-Agent', " .. ps_quote(USER_AGENT) .. ")",
-        "$bytes = $wc.DownloadData($url)",
-        "$gridDirs = Get-ChildItem -LiteralPath $userdata -Directory | ForEach-Object { Join-Path $_.FullName 'config\\grid' }",
-        "$written = @()",
-        "foreach ($gridDir in $gridDirs) {",
-        "  if (!(Test-Path -LiteralPath $gridDir)) { New-Item -ItemType Directory -Force -Path $gridDir | Out-Null }",
-        "  Get-ChildItem -LiteralPath $gridDir -File -ErrorAction SilentlyContinue | Where-Object { $_.BaseName -eq $baseName } | Remove-Item -Force -ErrorAction SilentlyContinue",
-        "  $target = Join-Path $gridDir $fileName",
-        "  [System.IO.File]::WriteAllBytes($target, $bytes)",
-        "  $written += $target",
-        "}",
-        "if ($written.Count -eq 0) { throw 'No Steam grid folders were available.' }",
-        "Write-Output ($written -join '|')"
-    }, "; ")
-
-    local result = run_powershell(script)
-    if not result or result == "" then
-        logger:error("Animated artwork direct write failed")
+    local target_path = fs.join(grid_dir, file_name)
+    local temp_dir = utils.getenv("TEMP") or utils.getenv("TMP") or utils.get_backend_path()
+    local temp_path = fs.join(temp_dir, "steamgriddb-millennium-animated-" .. utils.uuid() .. ".download")
+    local call_ok, result, download_err = pcall(http.download, url, temp_path, {
+        timeout = 60,
+        follow_redirects = true,
+        verify_ssl = true,
+        user_agent = USER_AGENT,
+    })
+    if not call_ok or not result or not result.success or (result.status and (result.status < 200 or result.status >= 300)) then
+        os.remove(temp_path)
+        logger:error("Animated artwork native download failed: " .. tostring(call_ok and (download_err or (result and result.status)) or result))
         return false
     end
 
-    return result
+    local entries, list_err = fs.list(grid_dir)
+    if not entries then
+        os.remove(temp_path)
+        logger:error("Could not inspect active Steam grid folder: " .. tostring(list_err))
+        return false
+    end
+    for _, entry in ipairs(entries) do
+        if entry.is_file and fs.stem(entry.name) == base_name then
+            local removed, remove_err = fs.remove(entry.path)
+            if removed == nil then
+                os.remove(temp_path)
+                logger:error("Could not replace existing animated artwork: " .. tostring(remove_err))
+                return false
+            end
+        end
+    end
+
+    local moved, move_err = fs.rename(temp_path, target_path)
+    if not moved then
+        local copied, copy_err = fs.copy(temp_path, target_path)
+        os.remove(temp_path)
+        if not copied then
+            logger:error("Could not write animated artwork: " .. tostring(copy_err or move_err))
+            return false
+        end
+    end
+
+    logger:info("Animated artwork saved natively for Steam account " .. tostring(account_id) .. ": " .. target_path)
+    return target_path
 end
 
 function open_external_url(url)

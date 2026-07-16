@@ -54,7 +54,8 @@ const VIEW_LABEL: Record<ViewTab, string> = {
 };
 type FocusZone = 'tabs' | 'content';
 const isAnimatedAsset = (src: string) => /\.(webm|mp4)(\?|$)/i.test(src);
-const DEFAULT_VISIBLE_ROWS = 7;
+const DESKTOP_INITIAL_VISIBLE_ROWS = 7;
+const BIG_PICTURE_INITIAL_VISIBLE_ROWS = 3;
 const MIN_VERTICAL_ROW_GAP = 12;
 const MAX_VERTICAL_ROW_GAP = 44;
 const VERTICAL_FIT_EDGE_INSET = 4;
@@ -72,6 +73,14 @@ const emptyVerticalFits = (): Record<SGDBAssetType, VerticalFit | null> => ({
   hero: null,
   logo: null,
   icon: null,
+});
+
+const visibleRowsState = (rows: number): Record<SGDBAssetType, number> => ({
+  grid_p: rows,
+  grid_l: rows,
+  hero: rows,
+  logo: rows,
+  icon: rows,
 });
 
 const emptyScrollTops = (): Record<SGDBAssetType, number> => ({
@@ -187,13 +196,8 @@ export const GamepadView = ({
   const [focusZone, setFocusZone] = useState<FocusZone>('content');
   const [autoLoadReadyType, setAutoLoadReadyType] = useState<SGDBAssetType | null>(null);
   const [verticalFitByType, setVerticalFitByType] = useState<Record<SGDBAssetType, VerticalFit | null>>(() => emptyVerticalFits());
-  const [visibleRowsByType, setVisibleRowsByType] = useState<Record<SGDBAssetType, number>>({
-    grid_p: DEFAULT_VISIBLE_ROWS,
-    grid_l: DEFAULT_VISIBLE_ROWS,
-    hero: DEFAULT_VISIBLE_ROWS,
-    logo: DEFAULT_VISIBLE_ROWS,
-    icon: DEFAULT_VISIBLE_ROWS,
-  });
+  const initialVisibleRows = isGamepadUI ? BIG_PICTURE_INITIAL_VISIBLE_ROWS : DESKTOP_INITIAL_VISIBLE_ROWS;
+  const [visibleRowsByType, setVisibleRowsByType] = useState<Record<SGDBAssetType, number>>(() => visibleRowsState(initialVisibleRows));
   const tabAssets = assetsByType[assetType];
   const tabLoading = loadingByType[assetType];
   const tabEndReached = endReachedByType[assetType];
@@ -365,13 +369,13 @@ export const GamepadView = ({
     }
 
     if (hasHiddenLoadedAssets || !tabEndReached) {
-      setVisibleRowsByType((current) => ({ ...current, [assetType]: current[assetType] + DEFAULT_VISIBLE_ROWS }));
+      setVisibleRowsByType((current) => ({ ...current, [assetType]: current[assetType] + initialVisibleRows }));
     }
 
     if (!tabEndReached) {
       void loadAssets(assetType, pagesByType[assetType] + 1, true);
     }
-  }, [assetType, hasHiddenLoadedAssets, isGamepadUI, loadAssets, pagesByType, tabEndReached, tabLoading, visibleAssets]);
+  }, [assetType, hasHiddenLoadedAssets, initialVisibleRows, isGamepadUI, loadAssets, pagesByType, tabEndReached, tabLoading, visibleAssets]);
   const resetCurrentArtwork = () => {
     void resetArtwork(assetType);
   };
@@ -471,14 +475,8 @@ export const GamepadView = ({
   }, [measureVerticalFit]);
 
   useEffect(() => {
-    setVisibleRowsByType({
-      grid_p: DEFAULT_VISIBLE_ROWS,
-      grid_l: DEFAULT_VISIBLE_ROWS,
-      hero: DEFAULT_VISIBLE_ROWS,
-      logo: DEFAULT_VISIBLE_ROWS,
-      icon: DEFAULT_VISIBLE_ROWS,
-    });
-  }, [filters]);
+    setVisibleRowsByType(visibleRowsState(initialVisibleRows));
+  }, [filters, initialVisibleRows]);
 
   useLayoutEffect(() => {
     scrollTopByTypeRef.current = emptyScrollTops();
@@ -542,6 +540,60 @@ export const GamepadView = ({
       scroller.style.removeProperty('--sgdb-close-safe-padding');
     };
   }, []);
+
+  useLayoutEffect(() => {
+    const root = scrollerRef.current?.closest<HTMLElement>('.sgdbRoot');
+    if (!root || !isGamepadUI) {
+      root?.style.removeProperty('--sgdb-big-picture-header-height');
+      return undefined;
+    }
+
+    let frame: number | null = null;
+    let observedHeader: HTMLElement | null = null;
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => updateHeaderGeometry());
+    const updateHeaderGeometry = () => {
+      if (frame !== null) {
+        window.cancelAnimationFrame(frame);
+      }
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        const headerElement = document.getElementById('header_profile');
+        if (headerElement !== observedHeader) {
+          if (observedHeader) observer?.unobserve(observedHeader);
+          observedHeader = headerElement;
+          if (observedHeader) observer?.observe(observedHeader);
+        }
+        const headerRect = headerElement?.getBoundingClientRect();
+        const rootRect = root.getBoundingClientRect();
+        const measuredHeight = headerRect
+          ? Math.ceil(Math.max(0, headerRect.bottom - rootRect.top))
+          : 0;
+        if (measuredHeight > 0 && measuredHeight <= 160) {
+          root.style.setProperty('--sgdb-big-picture-header-height', `${measuredHeight}px`);
+        } else {
+          root.style.removeProperty('--sgdb-big-picture-header-height');
+        }
+      });
+    };
+
+    updateHeaderGeometry();
+    observer?.observe(root);
+    const mutationObserver = typeof MutationObserver === 'undefined'
+      ? null
+      : new MutationObserver(updateHeaderGeometry);
+    mutationObserver?.observe(document.body, { childList: true, subtree: true });
+    window.addEventListener('resize', updateHeaderGeometry);
+
+    return () => {
+      observer?.disconnect();
+      mutationObserver?.disconnect();
+      window.removeEventListener('resize', updateHeaderGeometry);
+      if (frame !== null) {
+        window.cancelAnimationFrame(frame);
+      }
+      root.style.removeProperty('--sgdb-big-picture-header-height');
+    };
+  }, [isGamepadUI]);
 
   useLayoutEffect(() => {
     const scroller = scrollerRef.current;
@@ -660,15 +712,24 @@ export const GamepadView = ({
 
     const maybeLoadMore = () => {
       const distanceToBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
-      if (distanceToBottom <= Math.max(480, scroller.clientHeight * 0.35)) {
+      const threshold = isGamepadUI
+        ? Math.max(240, scroller.clientHeight * 0.2)
+        : Math.max(480, scroller.clientHeight * 0.35);
+      if (distanceToBottom <= threshold) {
         showMoreAssets();
       }
     };
 
     scroller.addEventListener('scroll', maybeLoadMore, { passive: true });
-    maybeLoadMore();
+    if (isGamepadUI) {
+      if (scroller.scrollHeight <= scroller.clientHeight + 24) {
+        showMoreAssets();
+      }
+    } else {
+      maybeLoadMore();
+    }
     return () => scroller.removeEventListener('scroll', maybeLoadMore);
-  }, [assetType, autoLoadReadyType, canShowMore, showMoreAssets, visibleAssets.length]);
+  }, [assetType, autoLoadReadyType, canShowMore, isGamepadUI, showMoreAssets, visibleAssets.length]);
 
   useLayoutEffect(() => {
     if (preserveScrollTopRef.current === null && restoreAssetFocusIdRef.current === null) {

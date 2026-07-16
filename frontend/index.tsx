@@ -33,6 +33,7 @@ import { GamepadView } from './views/GamepadView';
 declare const SteamClient: {
   Apps: {
     ClearCustomArtworkForApp(appid: number, assetType: number): Promise<void>;
+    ReportLibraryAssetCacheMiss?(appid: number, assetType: number): void;
     SetCustomArtworkForApp(appid: number, data: string, extension: string, assetType: number): Promise<void>;
     SetCustomLogoPositionForApp?(appid: number, position: { pinnedPosition: string; nWidthPct: number; nHeightPct: number }): Promise<void>;
   };
@@ -589,11 +590,6 @@ const notice = (title: string, body: string) => {
 
 export const isAnimatedAsset = (src: string) => /\.(webm|mp4)(\?|$)/i.test(src);
 
-type DownloadedAsset = {
-  data: string;
-  byteLength?: number;
-};
-
 const getAssetExtension = (asset: SGDBAsset) => {
   const source = asset.url || asset.thumb || '';
   const match = source.match(/\.([a-z0-9]+)(?:\?|$)/i);
@@ -605,29 +601,6 @@ const getAssetExtension = (asset: SGDBAsset) => {
 };
 
 const isDirectAnimatedExtension = (extension: string) => extension === 'webm' || extension === 'mp4';
-
-const arrayBufferToBase64 = (buffer: ArrayBuffer) => {
-  const bytes = new Uint8Array(buffer);
-  const chunkSize = 0x8000;
-  let binary = '';
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    const chunk = bytes.subarray(index, index + chunkSize);
-    binary += String.fromCharCode(...chunk);
-  }
-  return window.btoa(binary);
-};
-
-const downloadAssetInBrowser = async (url: string): Promise<DownloadedAsset> => {
-  const response = await fetch(url, { cache: 'no-store' });
-  if (!response.ok) {
-    throw new Error(`Download failed with HTTP ${response.status}.`);
-  }
-  const buffer = await response.arrayBuffer();
-  return {
-    data: arrayBufferToBase64(buffer),
-    byteLength: buffer.byteLength,
-  };
-};
 
 const themeColorRows: { key: keyof ThemeColorSettings; label: string }[] = [
   { key: 'background', label: 'Background' },
@@ -815,7 +788,10 @@ const SteamGridDBContent = ({
   currentFiltersByTypeRef.current = filtersByType;
   const hasAppId = Number.isFinite(appId) && appId > 0;
   const isGamepadUI = uiMode === EUIMode.GamePad;
-  const densityModeKey = isGamepadUI ? 'gamepad' : 'desktop';
+  // Big Picture intentionally mirrors the desktop browser's density choices.
+  // Keep the legacy gamepad density record readable for backwards compatibility,
+  // but use the desktop record as the single source of truth in both modes.
+  const densityModeKey = 'desktop' as const;
   const densityByType = densityByMode[densityModeKey];
   const filters = filtersByType[assetType] ?? defaultFilters;
   const rootStyle = {
@@ -1108,20 +1084,18 @@ const SteamGridDBContent = ({
         if (type === 'logo') {
           setDefaultLogoPosition(appId);
         }
+        SteamClient.Apps.ReportLibraryAssetCacheMiss?.(appId, ASSET_TYPE[type]);
         notice('Animated Artwork Saved', `${ASSET_LABEL[type]} was saved directly. Restart Steam if it does not refresh immediately.`);
         return;
       }
 
-      const downloaded: DownloadedAsset | false = await downloadAssetInBrowser(asset.url).catch(async () => {
-        const data = await downloadAsBase64({ url: asset.url });
-        return data ? ({ data } as DownloadedAsset) : false;
-      });
+      const downloaded = await downloadAsBase64({ url: asset.url });
       if (!downloaded) {
         throw new Error('The selected image could not be downloaded.');
       }
 
       await SteamClient.Apps.ClearCustomArtworkForApp(appId, ASSET_TYPE[type]).catch(() => undefined);
-      await SteamClient.Apps.SetCustomArtworkForApp(appId, downloaded.data, extension, ASSET_TYPE[type]);
+      await SteamClient.Apps.SetCustomArtworkForApp(appId, downloaded, extension, ASSET_TYPE[type]);
       if (type === 'logo') {
         setDefaultLogoPosition(appId);
       }
@@ -1238,7 +1212,7 @@ const SteamGridDBContent = ({
   };
 
   return (
-    <div className={`sgdbRoot sgdbGamepad ${isGamepadUI ? 'sgdbBigPicture' : 'sgdbDesktopToolbar'} ${popout ? 'sgdbPopoutContent' : ''} ${hasAppId ? '' : 'sgdbSettingsRoot'}`} id="sgdb-wrap" style={rootStyle}>
+    <div className={`sgdbRoot sgdbGamepad sgdbDesktopToolbar ${isGamepadUI ? 'sgdbBigPicture' : ''} ${popout || (isGamepadUI && hasAppId) ? 'sgdbPopoutContent' : ''} ${hasAppId ? '' : 'sgdbSettingsRoot'}`} id="sgdb-wrap" style={rootStyle}>
       <style>{styles}</style>
       {hasAppId
         ? apiKeyRequired
@@ -1643,6 +1617,14 @@ body:has(#sgdb-wrap.sgdbDesktopToolbar.sgdbPopoutContent) [class*="ModalPosition
   overflow: hidden;
   box-shadow: inset 0 0 0 1px var(--sgdb-border);
   background: var(--sgdb-bg-paint);
+}
+
+.sgdbBigPicture.sgdbPopoutContent {
+  padding-top: var(--sgdb-big-picture-header-height, var(--basicui-header-height, 40px));
+}
+
+.sgdbRoot.sgdbBigPicture.sgdbPopoutContent .sgdbGamepadTabs {
+  top: var(--sgdb-big-picture-header-height, var(--basicui-header-height, 40px));
 }
 
 .sgdbDesktopToolbar.sgdbPopoutContent {
@@ -3632,6 +3614,60 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 .sgdbColumnsDropdown .DialogDropDown_Arrow svg {
   width: 12px;
   height: 12px;
+  fill: currentColor;
+}
+
+.sgdbBigPicture .sgdbColumnsDropdown > button[role="combobox"] {
+  display: block !important;
+  width: 100% !important;
+  height: 32px !important;
+  min-height: 32px !important;
+  padding: 0 12px 0 27px !important;
+  border: 1px solid transparent !important;
+  border-radius: 999px !important;
+  color: var(--sgdb-text-control) !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  box-sizing: border-box;
+  font-size: 12.75px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.42px !important;
+}
+
+.sgdbBigPicture .sgdbColumnsDropdown > button[role="combobox"] > div {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) 13px;
+  align-items: center;
+  width: 100%;
+  height: 100%;
+  gap: 0;
+}
+
+.sgdbBigPicture .sgdbColumnsDropdown > button[role="combobox"]:hover,
+.sgdbBigPicture .sgdbColumnsDropdown > button[role="combobox"]:focus-visible,
+.sgdbBigPicture .sgdbColumnsDropdown > button[role="combobox"].gpfocus,
+.sgdbBigPicture .sgdbColumnsDropdown > button[role="combobox"][aria-expanded="true"] {
+  color: var(--sgdb-text) !important;
+  border-color: var(--sgdb-border-soft) !important;
+  background: var(--sgdb-surface-hover) !important;
+}
+
+.sgdbBigPicture .sgdbColumnsDropdown > button[role="combobox"] .DialogDropDown_CurrentDisplay {
+  grid-column: 1;
+  justify-self: start;
+  min-width: max-content;
+  overflow: visible;
+  white-space: nowrap;
+  text-overflow: clip;
+  line-height: 1;
+}
+
+.sgdbBigPicture .sgdbColumnsDropdown > button[role="combobox"] svg {
+  grid-column: 2;
+  justify-self: center;
+  width: 12px;
+  height: 12px;
+  color: var(--sgdb-text-control);
   fill: currentColor;
 }
 

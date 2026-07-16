@@ -36,24 +36,29 @@ jobs:
         run: pnpm run build
 
       - name: Package plugin
+        id: package
         shell: bash
         run: |
           set -euo pipefail
+          VERSION="$(node -p "require('./plugin.json').version")"
+          ARCHIVE="SteamGridDB-Millennium-v${VERSION}.zip"
           rm -rf release
           mkdir -p release/SteamGridDB
           cp plugin.json package.json pnpm-lock.yaml README.md tsconfig.json release/SteamGridDB/
           cp -R backend frontend .millennium release/SteamGridDB/
           cd release
-          zip -r SteamGridDB-Millennium.zip SteamGridDB
+          zip -r "$ARCHIVE" SteamGridDB
+          echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
+          echo "artifact=SteamGridDB-Millennium-v${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SteamGridDB-Millennium
-          path: release/SteamGridDB-Millennium.zip
+          name: ${{ steps.package.outputs.artifact }}
+          path: release/${{ steps.package.outputs.archive }}
 
       - name: Create GitHub release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: release/SteamGridDB-Millennium.zip
+          files: release/${{ steps.package.outputs.archive }}
