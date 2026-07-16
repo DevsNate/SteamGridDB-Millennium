@@ -1433,6 +1433,12 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 
 /* Artwork cards and actions -------------------------------------------- */
 .image-wrap.sgdbAsset {
+  --sgdb-action-min: 24px;
+  --sgdb-action-fluid: min(13cqw, 9cqh);
+  --sgdb-action-max: 38px;
+  --sgdb-action-size: clamp(var(--sgdb-action-min), var(--sgdb-action-fluid), var(--sgdb-action-max));
+  --sgdb-action-glyph-size: 62%;
+  --sgdb-action-corner: 4px;
   position: relative;
   width: 100%;
   margin-top: auto;
@@ -1447,16 +1453,21 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 }
 
 .image-wrap.sgdbAsset.type-grid_p {
+  --sgdb-action-fluid: min(13cqw, 9cqh);
   padding-bottom: 0 !important;
   aspect-ratio: 2 / 3;
 }
 
 .image-wrap.sgdbAsset.type-grid_l {
+  --sgdb-action-fluid: min(9cqw, 22cqh);
+  --sgdb-action-max: 36px;
   padding-bottom: 0 !important;
   aspect-ratio: 92 / 43;
 }
 
 .image-wrap.sgdbAsset.type-hero {
+  --sgdb-action-fluid: min(6.5cqw, 22cqh);
+  --sgdb-action-max: 36px;
   padding-bottom: 0 !important;
   aspect-ratio: 96 / 31;
 }
@@ -1469,13 +1480,21 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 }
 
 .image-wrap.sgdbAsset.type-logo {
+  --sgdb-action-fluid: min(9cqw, 22cqh);
+  --sgdb-action-max: 36px;
   padding-bottom: 0 !important;
   aspect-ratio: 650 / 248;
 }
 
 .image-wrap.sgdbAsset.type-icon {
+  --sgdb-action-fluid: min(14cqw, 14cqh);
   padding-bottom: 0 !important;
   aspect-ratio: 1 / 1;
+}
+
+.sgdbBigPicture .image-wrap.sgdbAsset {
+  --sgdb-action-min: 28px;
+  --sgdb-action-max: 42px;
 }
 
 .image-wrap.sgdbAsset:hover,
@@ -1487,6 +1506,12 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   box-shadow: 0 18px 34px rgba(0, 0, 0, 0.44), 0 0 0 1px rgba(255, 255, 255, 0.16);
 }
 
+.sgdbExternalLinkButton,
+.sgdbCollectionAddButton {
+  width: var(--sgdb-action-size);
+  height: var(--sgdb-action-size);
+}
+
 .sgdbExternalLinkButton {
   position: absolute;
   left: 0;
@@ -1494,13 +1519,11 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   z-index: 4;
   display: grid;
   place-items: center;
-  width: clamp(23px, 13cqw, 38px);
-  height: clamp(23px, 13cqw, 38px);
   padding: 0;
   border: 1px solid var(--sgdb-border-soft);
   border-left-width: 0;
   border-bottom-width: 0;
-  border-radius: 0 clamp(3px, 2.4cqw, 4px) 0 0;
+  border-radius: 0 var(--sgdb-action-corner) 0 0;
   color: var(--sgdb-text-control);
   background: color-mix(in srgb, var(--sgdb-surface-hover) 88%, transparent);
   box-shadow: none;
@@ -1517,13 +1540,11 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   z-index: 4;
   display: grid;
   place-items: center;
-  width: clamp(23px, 13cqw, 38px);
-  height: clamp(23px, 13cqw, 38px);
   padding: 0;
   border: 1px solid var(--sgdb-border-soft);
   border-top-width: 0;
   border-right-width: 0;
-  border-radius: 0 0 0 clamp(3px, 2.4cqw, 4px);
+  border-radius: 0 0 0 var(--sgdb-action-corner);
   color: var(--sgdb-text-control);
   background: color-mix(in srgb, var(--sgdb-surface-hover) 88%, transparent);
   box-shadow: none;
@@ -1531,14 +1552,6 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   opacity: 0;
   transform: translateY(-6px);
   transition: opacity 120ms ease, transform 120ms ease, background 120ms ease, color 120ms ease;
-}
-
-.image-wrap.sgdbAsset.type-grid_l .sgdbCollectionAddButton,
-.image-wrap.sgdbAsset.type-hero .sgdbCollectionAddButton,
-.image-wrap.sgdbAsset.type-logo .sgdbCollectionAddButton {
-  width: clamp(20px, min(7.5cqw, 24cqh), 33px);
-  height: clamp(20px, min(7.5cqw, 24cqh), 33px);
-  border-radius: 0 0 0 clamp(3px, min(2cqw, 4cqh), 5px);
 }
 
 .image-wrap.sgdbAsset:hover .sgdbCollectionAddButton,
@@ -1555,22 +1568,18 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   outline: 0;
 }
 
-.sgdbCollectionAddIcon {
-  width: 62%;
-  height: 62%;
+.sgdbCollectionAddIcon,
+.sgdbExternalIcon {
+  width: var(--sgdb-action-glyph-size);
+  height: var(--sgdb-action-glyph-size);
   display: block;
+}
+
+.sgdbCollectionAddIcon {
   fill: none;
   stroke: currentColor;
   stroke-width: 2.35;
   stroke-linecap: round;
-}
-
-.image-wrap.sgdbAsset.type-grid_l .sgdbExternalLinkButton,
-.image-wrap.sgdbAsset.type-hero .sgdbExternalLinkButton,
-.image-wrap.sgdbAsset.type-logo .sgdbExternalLinkButton {
-  width: clamp(20px, min(7.5cqw, 24cqh), 33px);
-  height: clamp(20px, min(7.5cqw, 24cqh), 33px);
-  border-radius: 0 clamp(3px, min(2cqw, 4cqh), 5px) 0 0;
 }
 
 .image-wrap.sgdbAsset:hover .sgdbExternalLinkButton,
@@ -1588,23 +1597,12 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 }
 
 .sgdbExternalIcon {
-  width: clamp(19px, 10.6cqw, 26px);
-  height: clamp(19px, 10.6cqw, 26px);
-  display: block;
   overflow: visible;
   fill: none;
   stroke: currentColor;
   stroke-width: 2.35;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-.image-wrap.sgdbAsset.type-grid_l .sgdbExternalIcon,
-.image-wrap.sgdbAsset.type-hero .sgdbExternalIcon,
-.image-wrap.sgdbAsset.type-logo .sgdbExternalIcon {
-  width: clamp(16px, min(6.25cqw, 18.75cqh), 23px);
-  height: clamp(16px, min(6.25cqw, 18.75cqh), 23px);
-  stroke-width: 2.45;
 }
 
 .sgdbMedia {
@@ -1940,18 +1938,6 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   border: 1px solid var(--sgdb-border-soft);
   background: var(--sgdb-surface-hover) !important;
   box-shadow: none !important;
-}
-
-.sgdbDesktopToolbar .image-wrap.sgdbAsset.type-grid_l .sgdbExternalLinkButton,
-.sgdbDesktopToolbar .image-wrap.sgdbAsset.type-hero .sgdbExternalLinkButton {
-  width: clamp(30px, min(11.25cqw, 36cqh), 50px);
-  height: clamp(30px, min(11.25cqw, 36cqh), 50px);
-}
-
-.sgdbDesktopToolbar .image-wrap.sgdbAsset.type-grid_l .sgdbExternalIcon,
-.sgdbDesktopToolbar .image-wrap.sgdbAsset.type-hero .sgdbExternalIcon {
-  width: clamp(24px, min(9.375cqw, 28.125cqh), 35px);
-  height: clamp(24px, min(9.375cqw, 28.125cqh), 35px);
 }
 
 .sgdbDesktopToolbar .image-wrap.sgdbAsset.type-grid_l .sgdbChips,
