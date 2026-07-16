@@ -20,6 +20,8 @@ end
 local SETTINGS_FILE = fs.join(resolve_plugin_dir(), "settings.json")
 local settings = { api_key = "" }
 
+-- Settings ---------------------------------------------------------------
+
 local function trim(value)
     return string.match(tostring(value or ""), "^%s*(.-)%s*$") or ""
 end
@@ -49,6 +51,8 @@ local function save_settings()
     end
     return ok
 end
+
+-- SteamGridDB API --------------------------------------------------------
 
 local function join_url(path)
     if string.sub(path, 1, 1) == "/" then
@@ -83,6 +87,8 @@ local function request_json(path)
     return res.body
 end
 
+-- PowerShell execution ---------------------------------------------------
+
 local function ps_quote(value)
     return "'" .. string.gsub(tostring(value), "'", "''") .. "'"
 end
@@ -106,6 +112,8 @@ local function run_powershell(script)
 
     return utils.trim(output)
 end
+
+-- Frontend-callable API --------------------------------------------------
 
 function sgdb_request(path)
     return request_json(path)
@@ -237,6 +245,8 @@ function download_as_base64(url)
     return encoded
 end
 
+-- Steam account and cache discovery -------------------------------------
+
 local function steam_library_cache()
     return fs.join(millennium.steam_path(), "appcache", "librarycache")
 end
@@ -288,6 +298,8 @@ local function resolve_active_grid_dir()
     logger:error("Could not identify the active Steam account from loginusers.vdf")
     return nil
 end
+
+-- Artwork writes ---------------------------------------------------------
 
 function set_steam_icon_from_url(appid, url, extension)
     if type(appid) == "table" then
@@ -645,6 +657,8 @@ function set_animated_artwork_from_url(appid, asset_type, url, extension)
     logger:info("Animated artwork saved natively for Steam account " .. tostring(account_id) .. ": " .. target_path)
     return target_path
 end
+
+-- External navigation and lifecycle -------------------------------------
 
 function open_external_url(url)
     if type(url) ~= "string" or not string.match(url, "^https://www%.steamgriddb%.com/") then

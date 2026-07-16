@@ -2,7 +2,7 @@ import { DialogButton, Dropdown, Focusable, GamepadButton, Spinner } from '@stea
 import { Dispatch, SetStateAction, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { columnOptions } from '../layout';
 import type { AssetDensityState } from '../layout';
-import type { AssetState, EndState, ErrorState, FilterState, LoadingState, PageState, SGDBAsset, SGDBAssetType } from '../index';
+import type { AssetState, EndState, ErrorState, FilterState, LoadingState, PageState, SGDBAsset, SGDBAssetType } from '../types';
 
 type ViewProps = {
   assetType: SGDBAssetType;

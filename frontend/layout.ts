@@ -1,4 +1,4 @@
-import type { SGDBAssetType } from './index';
+import type { SGDBAssetType } from './types';
 
 export type AssetDensityState = Record<SGDBAssetType, number>;
 export type AssetDensityMode = 'desktop' | 'gamepad';
