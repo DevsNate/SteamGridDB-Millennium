@@ -12,15 +12,79 @@ import type { FC } from 'react';
 type Patch = { unpatch?: () => void };
 
 let steamDesktopOwnerWindow: Window | null = null;
+let millenniumMainWindowFallback: Window | null = null;
+let millenniumMainWindowRepairTimers: number[] = [];
+
+const getPopupOwnerWindow = (popup: any): Window | null => {
+  const ownerWindow = popup?.m_popup?.window ?? popup?.m_popup ?? popup?.window;
+  try {
+    return ownerWindow?.document && !ownerWindow.closed ? ownerWindow as Window : null;
+  } catch {
+    return null;
+  }
+};
+
+const getExistingPopupWindow = (name: string): Window | null => {
+  const popup = (globalThis as any).g_PopupManager?.GetExistingPopup?.(name);
+  return getPopupOwnerWindow(popup);
+};
+
+/**
+ * Millennium currently resolves its main window from the Desktop popup only.
+ * In Big Picture-only sessions that leaves core.mainWindow undefined and the
+ * Millennium Logs view crashes when it reads mainWindow.document. Supply the
+ * existing BPM window only when Millennium does not already have a valid owner.
+ */
+const ensureMillenniumMainWindow = (popup?: any) => {
+  const core = (window as any).PLUGIN_LIST?.core;
+  if (!core) {
+    return;
+  }
+
+  if (getPopupOwnerWindow(core.mainWindow)) {
+    return;
+  }
+
+  const createdWindow = getPopupOwnerWindow(popup);
+  const desktopWindow = popup?.m_strName === 'SP Desktop_uid0'
+    ? createdWindow
+    : getExistingPopupWindow('SP Desktop_uid0');
+  const bigPictureWindow = popup?.m_strName === 'SP BPM_uid0'
+    ? createdWindow
+    : getExistingPopupWindow('SP BPM_uid0');
+  const fallbackWindow = desktopWindow ?? bigPictureWindow;
+
+  if (fallbackWindow) {
+    core.mainWindow = fallbackWindow;
+    millenniumMainWindowFallback = fallbackWindow;
+  }
+};
+
+const scheduleMillenniumMainWindowRepair = (popup?: any) => {
+  millenniumMainWindowRepairTimers.forEach((timer) => window.clearTimeout(timer));
+  millenniumMainWindowRepairTimers = [];
+  ensureMillenniumMainWindow(popup);
+
+  // Millennium's own window hook resumes from an async callback and can clear
+  // mainWindow after synchronous plugin hooks have finished. Retry after that
+  // callback, with short follow-ups for early startup/config initialization.
+  [0, 100, 1000].forEach((delay) => {
+    const timer = window.setTimeout(() => {
+      millenniumMainWindowRepairTimers = millenniumMainWindowRepairTimers.filter((activeTimer) => activeTimer !== timer);
+      ensureMillenniumMainWindow(popup);
+    }, delay);
+    millenniumMainWindowRepairTimers.push(timer);
+  });
+};
 
 const captureSteamDesktopWindow = (popup: any) => {
   if (popup?.m_strName !== 'SP Desktop_uid0') {
     return;
   }
 
-  const ownerWindow = popup?.m_popup?.window ?? popup?.m_popup;
-  if (ownerWindow?.document) {
-    steamDesktopOwnerWindow = ownerWindow as Window;
+  const ownerWindow = getPopupOwnerWindow(popup);
+  if (ownerWindow) {
+    steamDesktopOwnerWindow = ownerWindow;
   }
 };
 
@@ -30,8 +94,23 @@ export const clearSteamDesktopOwnerWindow = () => {
   steamDesktopOwnerWindow = null;
 };
 
+export const clearMillenniumMainWindowFallback = () => {
+  millenniumMainWindowRepairTimers.forEach((timer) => window.clearTimeout(timer));
+  millenniumMainWindowRepairTimers = [];
+  const core = (window as any).PLUGIN_LIST?.core;
+  if (millenniumMainWindowFallback && core?.mainWindow === millenniumMainWindowFallback) {
+    core.mainWindow = undefined;
+  }
+  millenniumMainWindowFallback = null;
+};
+
 export const registerSteamWindowHook = () => {
-  window.__SGDB_WINDOW_HOOK__ = captureSteamDesktopWindow;
+  window.__SGDB_WINDOW_HOOK__ = (popup: any) => {
+    captureSteamDesktopWindow(popup);
+    scheduleMillenniumMainWindowRepair(popup);
+  };
+  scheduleMillenniumMainWindowRepair();
+
   if (window.__SGDB_WINDOW_HOOK_REGISTERED__ || !Millennium?.AddWindowCreateHook) {
     return;
   }

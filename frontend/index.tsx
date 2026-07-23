@@ -3,6 +3,7 @@ import {
   DialogButton,
   DropdownItem,
   EUIMode,
+  Focusable,
   IconsModule,
   Menu,
   MenuItem,
@@ -37,6 +38,7 @@ import { densityDefaults, normalizeDensityState } from './layout';
 import type { AssetDensityState } from './layout';
 import { styles } from './styles';
 import {
+  clearMillenniumMainWindowFallback,
   clearSteamDesktopOwnerWindow,
   getSteamDesktopOwnerWindow,
   installResizablePopupPatch,
@@ -90,6 +92,7 @@ type PluginSettings = {
   showExternalLinks: boolean;
   showCollectionButtons: boolean;
   showCreatorNames: boolean;
+  hideDesktopGameLogos: boolean;
   themePreset: ThemePresetKey;
   themeColors: ThemeColorSettings;
 };
@@ -268,6 +271,7 @@ const defaultSettings: PluginSettings = {
   showExternalLinks: false,
   showCollectionButtons: false,
   showCreatorNames: true,
+  hideDesktopGameLogos: false,
   themePreset: defaultThemePreset,
   themeColors: defaultThemeColors,
 };
@@ -382,6 +386,7 @@ const normalizeSettings = (settings: Partial<PluginSettings>): PluginSettings =>
     showExternalLinks: typeof settings.showExternalLinks === 'boolean' ? settings.showExternalLinks : defaultSettings.showExternalLinks,
     showCollectionButtons: typeof settings.showCollectionButtons === 'boolean' ? settings.showCollectionButtons : defaultSettings.showCollectionButtons,
     showCreatorNames: typeof settings.showCreatorNames === 'boolean' ? settings.showCreatorNames : defaultSettings.showCreatorNames,
+    hideDesktopGameLogos: typeof settings.hideDesktopGameLogos === 'boolean' ? settings.hideDesktopGameLogos : defaultSettings.hideDesktopGameLogos,
     themePreset: settings.themePreset === undefined ? themePresetFromColors(themeColors) : normalizeThemePreset(settings.themePreset),
     themeColors,
   };
@@ -637,6 +642,10 @@ const SettingsView = ({
         <PanelSectionRow><ToggleField label="Asset creator names" description="Display the uploader below each artwork item." checked={settings.showCreatorNames} onChange={(showCreatorNames) => setSettings((current) => ({ ...current, showCreatorNames }))} /></PanelSectionRow>
       </PanelSection>
 
+      <PanelSection title="STEAM LIBRARY">
+        <PanelSectionRow><ToggleField label="Hide game logos" description="Hide logos on Desktop library game pages without changing the artwork." checked={settings.hideDesktopGameLogos} onChange={(hideDesktopGameLogos) => setSettings((current) => ({ ...current, hideDesktopGameLogos }))} /></PanelSectionRow>
+      </PanelSection>
+
       <PanelSection title="APPEARANCE">
         <PanelSectionRow>
           <DropdownItem label="Artwork browser theme" description="Choose a preset or fine-tune the colors below." rgOptions={[...themePresets.map((preset) => ({ data: preset.key, label: preset.label })), { data: 'custom', label: 'Custom' }]} selectedOption={settings.themePreset} onChange={(option) => updateThemePreset(option.data as ThemePresetKey)} />
@@ -669,10 +678,10 @@ const MissingApiKeyView = ({ onRetry }: { onRetry: () => void }) => (
         <li>In Steam, open <strong>Steam → Millennium Library Manager → SteamGridDB → API Key</strong>.</li>
         <li>Paste it into <strong>SteamGridDB API key</strong>, select <strong>Save Key</strong>, then return here.</li>
       </ol>
-      <div className="sgdbApiKeyFallbackActions">
+      <Focusable className="sgdbApiKeyFallbackActions" flow-children="row">
         <DialogButton onClick={() => void openExternalUrl({ url: 'https://www.steamgriddb.com/profile/preferences/api' })}>Get API key</DialogButton>
         <DialogButton onClick={onRetry}>Retry</DialogButton>
-      </div>
+      </Focusable>
     </div>
   </div>
 );
@@ -734,6 +743,11 @@ const SteamGridDBContent = ({
   useEffect(() => {
     window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
   }, [settings]);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('sgdbHideDesktopGameLogos', settings.hideDesktopGameLogos);
+    return () => document.documentElement.classList.remove('sgdbHideDesktopGameLogos');
+  }, [settings.hideDesktopGameLogos]);
 
   useEffect(() => {
     window.localStorage.setItem(DENSITY_STORAGE_KEY, JSON.stringify(densityByMode));
@@ -1199,6 +1213,7 @@ export default definePlugin(() => ({
     window.__SGDB_CONTEXT_MENU_PATCH__?.unpatch?.();
     delete window.__SGDB_CONTEXT_MENU_PATCH__;
     delete window.__SGDB_WINDOW_HOOK__;
+    clearMillenniumMainWindowFallback();
     clearSteamDesktopOwnerWindow();
   },
 }));

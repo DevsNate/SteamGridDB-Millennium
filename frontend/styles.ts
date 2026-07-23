@@ -1,4 +1,8 @@
 export const styles = `
+html.sgdbHideDesktopGameLogos ._2DVdg_N1qLNDdnxJqN-RBX > img._3NBxSLAZLbbbnul8KfDFjw {
+  opacity: 0 !important;
+}
+
 /* Application shell, popouts, and window chrome ------------------------ */
 .sgdbRoot {
   position: relative;
@@ -135,6 +139,7 @@ body:has(#sgdb-wrap.sgdbDesktopToolbar.sgdbPopoutContent) [class*="ModalPosition
   min-height: 0;
   padding: 0 8px 12px;
   overflow-y: auto;
+  scroll-behavior: smooth;
   scrollbar-gutter: stable;
   box-sizing: border-box;
   background: var(--sgdb-bg);
@@ -1675,25 +1680,36 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
 }
 
 .sgdbChips {
+  --sgdb-chip-inset: clamp(4px, min(1.8cqw, 5cqh), 10px);
+  --sgdb-chip-gap: clamp(2px, min(0.75cqw, 2.5cqh), 5px);
+  --sgdb-chip-peek: clamp(7px, min(2.5cqw, 8cqh), 13px);
+  --sgdb-chip-padding-block: clamp(3px, min(0.9cqw, 3cqh), 6px);
+  --sgdb-chip-padding-inline: clamp(6px, min(2cqw, 6.5cqh), 12px);
+  --sgdb-chip-radius: clamp(4px, min(1.5cqw, 5cqh), 8px);
+  --sgdb-chip-font-size: clamp(8px, min(2.25cqw, 7.5cqh), 16px);
   position: absolute;
-  right: calc(-1 * clamp(5px, min(3.25cqw, 6.25cqh), 10px));
-  top: clamp(5px, min(3.25cqw, 6.25cqh), 10px);
+  top: var(--sgdb-chip-inset);
+  left: calc(-1 * var(--sgdb-chip-inset));
   display: flex;
   flex-direction: column;
-  gap: clamp(3px, min(1.75cqw, 3.75cqh), 5px);
+  align-items: flex-start;
+  gap: var(--sgdb-chip-gap);
   z-index: 3;
   pointer-events: none;
 }
 
 .sgdbChips span {
-  padding: clamp(3px, min(1.75cqw, 3.75cqh), 6px) clamp(6px, min(5cqw, 10cqh), 15px);
-  min-height: clamp(14px, min(8.75cqw, 16.25cqh), 28px);
-  border-radius: clamp(4px, min(2.75cqw, 6.25cqh), 8px) 0 0 clamp(4px, min(2.75cqw, 6.25cqh), 8px);
+  min-height: calc(var(--sgdb-chip-font-size) + var(--sgdb-chip-padding-block) + var(--sgdb-chip-padding-block));
+  padding: var(--sgdb-chip-padding-block) var(--sgdb-chip-padding-inline);
+  border-radius: 0 var(--sgdb-chip-radius) var(--sgdb-chip-radius) 0;
+  box-sizing: border-box;
   color: white;
-  font-size: clamp(8px, min(4.75cqw, 9.25cqh), 15px);
+  font-size: var(--sgdb-chip-font-size);
   font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
   text-transform: uppercase;
-  transform: translateX(calc(100% - clamp(8px, min(5cqw, 10cqh), 15px)));
+  transform: translateX(calc(-100% + var(--sgdb-chip-peek)));
   transition: transform 220ms cubic-bezier(0.33, 1, 0.68, 1);
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.35);
 }
@@ -1939,31 +1955,6 @@ body:has(#sgdb-wrap) [class*="closeButton"]:hover {
   border: 1px solid var(--sgdb-border-soft);
   background: var(--sgdb-surface-hover) !important;
   box-shadow: none !important;
-}
-
-.sgdbDesktopToolbar .image-wrap.sgdbAsset.type-grid_l .sgdbChips,
-.sgdbDesktopToolbar .image-wrap.sgdbAsset.type-hero .sgdbChips {
-  right: calc(-1 * clamp(7.5px, min(4.875cqw, 9.375cqh), 15px));
-  top: clamp(7.5px, min(4.875cqw, 9.375cqh), 15px);
-  gap: clamp(4.5px, min(2.625cqw, 5.625cqh), 7.5px);
-}
-
-.sgdbDesktopToolbar .image-wrap.sgdbAsset.type-grid_l .sgdbChips span,
-.sgdbDesktopToolbar .image-wrap.sgdbAsset.type-hero .sgdbChips span {
-  padding: clamp(4.5px, min(2.625cqw, 5.625cqh), 9px) clamp(9px, min(7.5cqw, 15cqh), 22.5px);
-  min-height: clamp(21px, min(13.125cqw, 24.375cqh), 42px);
-  border-radius: clamp(6px, min(4.125cqw, 9.375cqh), 12px) 0 0 clamp(6px, min(4.125cqw, 9.375cqh), 12px);
-  font-size: clamp(12px, min(7.125cqw, 13.875cqh), 22.5px);
-  transform: translateX(calc(100% - clamp(12px, min(7.5cqw, 15cqh), 22.5px)));
-}
-
-.sgdbDesktopToolbar .image-wrap.sgdbAsset.type-grid_l:hover .sgdbChips span,
-.sgdbDesktopToolbar .image-wrap.sgdbAsset.type-grid_l.gpfocus .sgdbChips span,
-.sgdbDesktopToolbar .image-wrap.sgdbAsset.type-grid_l:focus-visible .sgdbChips span,
-.sgdbDesktopToolbar .image-wrap.sgdbAsset.type-hero:hover .sgdbChips span,
-.sgdbDesktopToolbar .image-wrap.sgdbAsset.type-hero.gpfocus .sgdbChips span,
-.sgdbDesktopToolbar .image-wrap.sgdbAsset.type-hero:focus-visible .sgdbChips span {
-  transform: translateX(0);
 }
 
 /* Shared top toolbar and App ID lookup --------------------------------- */

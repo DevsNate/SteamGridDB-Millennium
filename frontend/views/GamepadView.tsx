@@ -59,6 +59,7 @@ const BIG_PICTURE_INITIAL_VISIBLE_ROWS = 3;
 const MIN_VERTICAL_ROW_GAP = 12;
 const MAX_VERTICAL_ROW_GAP = 44;
 const VERTICAL_FIT_EDGE_INSET = 4;
+const FOCUSED_ASSET_EDGE_INSET = 24;
 
 type VerticalFit = {
   rowGap: number;
@@ -185,9 +186,9 @@ export const GamepadView = ({
   const internalTabChangeRef = useRef(false);
   const lastBumperAtRef = useRef(0);
   const pendingArtworkFocusRef = useRef(true);
-  const preserveScrollTopRef = useRef<number | null>(null);
   const lastFocusedAssetIdRef = useRef<number | null>(null);
   const restoreAssetFocusIdRef = useRef<number | null>(null);
+  const focusedAssetScrollFrameRef = useRef<number | null>(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const tabsRef = useRef<HTMLDivElement | null>(null);
   const autoLoadPendingRef = useRef(false);
@@ -228,6 +229,57 @@ export const GamepadView = ({
     () => scrollerRef.current?.querySelector<HTMLElement>('.sgdbGrid') ?? null,
     [],
   );
+  const revealFocusedAsset = useCallback((target: HTMLElement) => {
+    if (!isGamepadUI) {
+      return;
+    }
+
+    if (focusedAssetScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(focusedAssetScrollFrameRef.current);
+    }
+    focusedAssetScrollFrameRef.current = window.requestAnimationFrame(() => {
+      focusedAssetScrollFrameRef.current = null;
+      const scroller = scrollerRef.current;
+      if (!scroller || !target.isConnected || !scroller.contains(target)) {
+        return;
+      }
+
+      const targetBounds = (target.closest<HTMLElement>('.asset-box-wrap') ?? target).getBoundingClientRect();
+      const scrollerBounds = scroller.getBoundingClientRect();
+      const root = scroller.closest<HTMLElement>('.sgdbRoot');
+      const rootStyles = window.getComputedStyle(root ?? scroller);
+      const footerHeight = Number.parseFloat(rootStyles.getPropertyValue('--gamepadui-current-footer-height')) || 0;
+      const visibleTop = scrollerBounds.top + FOCUSED_ASSET_EDGE_INSET;
+      const visibleBottom = scrollerBounds.bottom - Math.max(
+        FOCUSED_ASSET_EDGE_INSET,
+        footerHeight + FOCUSED_ASSET_EDGE_INSET,
+      );
+
+      let offset = 0;
+      if (targetBounds.top < visibleTop) {
+        offset = targetBounds.top - visibleTop;
+      } else if (targetBounds.bottom > visibleBottom) {
+        offset = targetBounds.bottom - visibleBottom;
+      }
+
+      if (Math.abs(offset) > 1) {
+        const maximumScrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+        scroller.scrollTo({
+          top: Math.max(0, Math.min(maximumScrollTop, scroller.scrollTop + offset)),
+          behavior: 'smooth',
+        });
+      }
+    });
+  }, [isGamepadUI]);
+  const handleAssetFocus = useCallback((assetId: number, target?: HTMLElement) => {
+    lastFocusedAssetIdRef.current = assetId;
+    setFocusZone('content');
+    const focusedAsset = target
+      ?? getGridElement()?.querySelector<HTMLElement>(`[data-sgdb-asset-id="${assetId}"]`);
+    if (focusedAsset) {
+      revealFocusedAsset(focusedAsset);
+    }
+  }, [getGridElement, revealFocusedAsset]);
   const selectTab = useCallback((tab: ViewTab) => {
     if (tab === activeTabRef.current) {
       return;
@@ -356,15 +408,12 @@ export const GamepadView = ({
     }
 
     autoLoadPendingRef.current = true;
-    const scroller = scrollerRef.current;
     if (isGamepadUI) {
-      preserveScrollTopRef.current = scroller?.scrollTop ?? null;
       const lastFocusedAssetId = lastFocusedAssetIdRef.current;
       restoreAssetFocusIdRef.current = lastFocusedAssetId && visibleAssets.some((asset) => asset.id === lastFocusedAssetId)
         ? lastFocusedAssetId
         : null;
     } else {
-      preserveScrollTopRef.current = null;
       restoreAssetFocusIdRef.current = null;
     }
 
@@ -639,6 +688,10 @@ export const GamepadView = ({
         window.cancelAnimationFrame(verticalFitFrameRef.current);
         verticalFitFrameRef.current = null;
       }
+      if (focusedAssetScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(focusedAssetScrollFrameRef.current);
+        focusedAssetScrollFrameRef.current = null;
+      }
     };
   }, [assetType, columnCount, filtersOpen, getGridElement, scheduleVerticalFit, showCreatorNames, visibleAssets.length]);
 
@@ -721,40 +774,27 @@ export const GamepadView = ({
     };
 
     scroller.addEventListener('scroll', maybeLoadMore, { passive: true });
-    if (isGamepadUI) {
-      if (scroller.scrollHeight <= scroller.clientHeight + 24) {
-        showMoreAssets();
-      }
-    } else {
-      maybeLoadMore();
-    }
+    maybeLoadMore();
     return () => scroller.removeEventListener('scroll', maybeLoadMore);
   }, [assetType, autoLoadReadyType, canShowMore, isGamepadUI, showMoreAssets, visibleAssets.length]);
 
   useLayoutEffect(() => {
-    if (preserveScrollTopRef.current === null && restoreAssetFocusIdRef.current === null) {
+    if (restoreAssetFocusIdRef.current === null) {
       return;
     }
 
-    const scrollTop = preserveScrollTopRef.current;
-    preserveScrollTopRef.current = null;
     const restoreAssetId = restoreAssetFocusIdRef.current;
     restoreAssetFocusIdRef.current = null;
-    const scroller = scrollerRef.current;
-    if (scroller && scrollTop !== null) {
-      scroller.scrollTop = scrollTop;
-      window.requestAnimationFrame(() => {
-        scroller.scrollTop = scrollTop;
-      });
-    }
-
-    if (restoreAssetId !== null) {
-      window.requestAnimationFrame(() => {
-        const target = getGridElement()?.querySelector<HTMLElement>(`[data-sgdb-asset-id="${restoreAssetId}"]`);
-        target?.focus();
-      });
-    }
-  }, [getGridElement, tabLoading, visibleAssets.length]);
+    window.requestAnimationFrame(() => {
+      const target = getGridElement()?.querySelector<HTMLElement>(`[data-sgdb-asset-id="${restoreAssetId}"]`);
+      if (target) {
+        if (!target.matches(':focus') && !target.classList.contains('gpfocus')) {
+          target.focus();
+        }
+        revealFocusedAsset(target);
+      }
+    });
+  }, [getGridElement, revealFocusedAsset, tabLoading, visibleAssets.length]);
 
   const normalizedLookupDraft = /^\d+$/.test(lookupAppIdDraft.trim())
     && Number.parseInt(lookupAppIdDraft, 10) > 0
@@ -1002,14 +1042,8 @@ export const GamepadView = ({
                 onOKActionDescription={`Apply ${ASSET_LABEL[assetType]}`}
                 onSecondaryActionDescription="Filter"
                 onSecondaryButton={() => setFiltersOpen((open) => !open)}
-                onGamepadFocus={() => {
-                  lastFocusedAssetIdRef.current = asset.id;
-                  setFocusZone('content');
-                }}
-                onFocus={() => {
-                  lastFocusedAssetIdRef.current = asset.id;
-                  setFocusZone('content');
-                }}
+                onGamepadFocus={() => handleAssetFocus(asset.id)}
+                onFocus={(event) => handleAssetFocus(asset.id, event.currentTarget)}
                 onMouseEnter={() => setFocusZone('content')}
                 onButtonDown={handleTabBumper}
                 role="button"

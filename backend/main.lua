@@ -6,7 +6,7 @@ local fs = require("fs")
 local json = require("json")
 
 local SGDB_API_BASE = "https://www.steamgriddb.com/api/v2"
-local USER_AGENT = "steamgriddb-millennium/0.1.0"
+local USER_AGENT = "steamgriddb-millennium/2.0.0"
 
 local function resolve_plugin_dir()
     local source = debug.getinfo(1, "S").source or ""

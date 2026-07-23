@@ -10,7 +10,9 @@ SteamGridDB for Millennium is a Steam artwork browser and manager built for the 
 - Download and apply Steam app icons through the Lua backend.
 - Reset custom artwork back to Steam defaults.
 - Add grids, wide grids, heroes, logos, and icons to SteamGridDB account collections.
-- Big Picture/controller-friendly artwork browsing with automatic loading while scrolling.
+- Big Picture/controller-friendly artwork browsing with smooth focus scrolling and automatic loading.
+- Responsive artwork labels that scale with the selected column count.
+- Optional Desktop library setting to hide game-page logos without changing artwork files.
 - Theme-aware interface designed to blend with Fluenty-style dark Steam themes.
 - Built-in Fluenty Dark, Steam Blue, OLED Black, Midnight Violet, and Ember theme presets.
 - Configurable theme colors for background, selected/hover surfaces, grid hover borders, slider track, and slider thumb.
@@ -18,7 +20,7 @@ SteamGridDB for Millennium is a Steam artwork browser and manager built for the 
 
 ## Installation
 
-Download `SteamGridDB-Millennium.zip` from the latest GitHub release.
+Download `SteamGridDB-Millennium-v2.0.0.zip` from the latest GitHub release.
 
 Extract the zip so the `SteamGridDB` folder is placed in Steam's Millennium plugins directory:
 
@@ -53,7 +55,7 @@ The production bundle is written to:
 
 ## Releases
 
-GitHub Actions builds the plugin on every `v*` tag and attaches `SteamGridDB-Millennium.zip` to the release.
+GitHub Actions builds the plugin on every `v*` tag and attaches a versioned `SteamGridDB-Millennium-vX.Y.Z.zip` archive to the release.
 
 ## Credits
 
