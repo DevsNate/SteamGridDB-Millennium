@@ -139,7 +139,6 @@ body:has(#sgdb-wrap.sgdbDesktopToolbar.sgdbPopoutContent) [class*="ModalPosition
   min-height: 0;
   padding: 0 8px 12px;
   overflow-y: auto;
-  scroll-behavior: smooth;
   scrollbar-gutter: stable;
   box-sizing: border-box;
   background: var(--sgdb-bg);

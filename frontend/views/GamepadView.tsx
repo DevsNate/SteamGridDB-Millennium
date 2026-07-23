@@ -60,6 +60,7 @@ const MIN_VERTICAL_ROW_GAP = 12;
 const MAX_VERTICAL_ROW_GAP = 44;
 const VERTICAL_FIT_EDGE_INSET = 4;
 const FOCUSED_ASSET_EDGE_INSET = 24;
+const MOUSE_WHEEL_FOCUS_SUPPRESSION_MS = 320;
 
 type VerticalFit = {
   rowGap: number;
@@ -189,6 +190,7 @@ export const GamepadView = ({
   const lastFocusedAssetIdRef = useRef<number | null>(null);
   const restoreAssetFocusIdRef = useRef<number | null>(null);
   const focusedAssetScrollFrameRef = useRef<number | null>(null);
+  const mouseWheelFocusSuppressedUntilRef = useRef(0);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const tabsRef = useRef<HTMLDivElement | null>(null);
   const autoLoadPendingRef = useRef(false);
@@ -230,7 +232,7 @@ export const GamepadView = ({
     [],
   );
   const revealFocusedAsset = useCallback((target: HTMLElement) => {
-    if (!isGamepadUI) {
+    if (!isGamepadUI || Date.now() < mouseWheelFocusSuppressedUntilRef.current) {
       return;
     }
 
@@ -239,6 +241,10 @@ export const GamepadView = ({
     }
     focusedAssetScrollFrameRef.current = window.requestAnimationFrame(() => {
       focusedAssetScrollFrameRef.current = null;
+      if (Date.now() < mouseWheelFocusSuppressedUntilRef.current) {
+        return;
+      }
+
       const scroller = scrollerRef.current;
       if (!scroller || !target.isConnected || !scroller.contains(target)) {
         return;
@@ -271,6 +277,20 @@ export const GamepadView = ({
       }
     });
   }, [isGamepadUI]);
+  const handleMouseWheel = useCallback(() => {
+    mouseWheelFocusSuppressedUntilRef.current = Date.now() + MOUSE_WHEEL_FOCUS_SUPPRESSION_MS;
+    restoreAssetFocusIdRef.current = null;
+
+    if (focusedAssetScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(focusedAssetScrollFrameRef.current);
+      focusedAssetScrollFrameRef.current = null;
+    }
+
+    const scroller = scrollerRef.current;
+    if (scroller) {
+      scroller.scrollTo({ top: scroller.scrollTop, behavior: 'auto' });
+    }
+  }, []);
   const handleAssetFocus = useCallback((assetId: number, target?: HTMLElement) => {
     lastFocusedAssetIdRef.current = assetId;
     setFocusZone('content');
@@ -304,6 +324,7 @@ export const GamepadView = ({
     selectTab(next);
   }, [selectTab]);
   const handleTabBumper = useCallback((event: CustomEvent<{ button: number }>) => {
+    mouseWheelFocusSuppressedUntilRef.current = 0;
     const isLeft = event.detail.button === GamepadButton.BUMPER_LEFT;
     const isRight = event.detail.button === GamepadButton.BUMPER_RIGHT;
     if (!isLeft && !isRight) {
@@ -408,7 +429,7 @@ export const GamepadView = ({
     }
 
     autoLoadPendingRef.current = true;
-    if (isGamepadUI) {
+    if (isGamepadUI && Date.now() >= mouseWheelFocusSuppressedUntilRef.current) {
       const lastFocusedAssetId = lastFocusedAssetIdRef.current;
       restoreAssetFocusIdRef.current = lastFocusedAssetId && visibleAssets.some((asset) => asset.id === lastFocusedAssetId)
         ? lastFocusedAssetId
@@ -944,7 +965,7 @@ export const GamepadView = ({
         ))}
       </div>
 
-      <div ref={scrollerRef} className="tabcontents-wrap">
+      <div ref={scrollerRef} className="tabcontents-wrap" onWheelCapture={handleMouseWheel}>
         <div className={`spinnyboi ${!tabLoading || tabAssets.length > 0 ? 'loaded' : ''}`}>
           <img alt="Loading..." src="/images/steam_spinner.png" />
         </div>

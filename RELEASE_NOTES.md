@@ -16,6 +16,8 @@ SteamGridDB 2.0 focuses on a smoother controller experience, better artwork scal
 - Focused artwork now remains visible above Steam's footer.
 - Improved automatic loading when the initial artwork rows fit inside the viewport.
 - Added Left/Right controller navigation to the missing-API-key action buttons.
+- Fixed Big Picture mouse-wheel scrolling being pulled back toward controller-focused artwork.
+- Mouse-wheel input now cancels focus-driven scrolling and row-loading focus restoration while preserving smooth controller navigation.
 
 ## Artwork Browser Improvements
 
