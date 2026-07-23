@@ -31,6 +31,11 @@ SteamGridDB 2.0 focuses on a smoother controller experience, better artwork scal
 - Added delayed retries to account for Millennium's asynchronous startup behavior.
 - Added complete timer, window-fallback, and plugin-unload cleanup.
 
+## Animated Artwork Reliability
+
+- Fixed animated artwork failing when newer Steam `loginusers.vdf` files omit the legacy `MostRecent` field.
+- Active-account detection now falls back to `AutoLogin`, then the newest valid account timestamp with an existing Steam userdata folder.
+
 ## Upgrade Notes
 
 - Existing settings and API credentials remain compatible.

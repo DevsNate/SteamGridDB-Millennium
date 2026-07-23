@@ -265,6 +265,18 @@ local function steam_account_id_from_steam_id64(steam_id)
     return tostring(math.floor(account_id))
 end
 
+local function ensure_grid_dir(userdata_dir, account_id)
+    local grid_dir = fs.join(userdata_dir, "config", "grid")
+    if not fs.exists(grid_dir) then
+        local created, create_err = fs.create_directories(grid_dir)
+        if not created and not fs.is_directory(grid_dir) then
+            logger:error("Could not create active Steam grid folder: " .. tostring(create_err))
+            return nil
+        end
+    end
+    return grid_dir, account_id
+end
+
 local function resolve_active_grid_dir()
     local steam_path = millennium.steam_path()
     local login_users_path = fs.join(steam_path, "config", "loginusers.vdf")
@@ -274,28 +286,47 @@ local function resolve_active_grid_dir()
         return nil
     end
 
+    local auto_login_dir = nil
+    local auto_login_account_id = nil
+    local auto_login_timestamp = -1
+    local newest_dir = nil
+    local newest_account_id = nil
+    local newest_timestamp = -1
+
     for steam_id, user_block in string.gmatch(login_users, '"(%d+)"%s*(%b{})') do
-        if string.match(user_block, '"MostRecent"%s*"1"') then
-            local account_id = steam_account_id_from_steam_id64(steam_id)
-            local userdata_dir = account_id and fs.join(steam_path, "userdata", account_id) or nil
-            if not userdata_dir or not fs.is_directory(userdata_dir) then
-                logger:error("Active Steam userdata folder was not found for account " .. tostring(account_id))
-                return nil
+        local account_id = steam_account_id_from_steam_id64(steam_id)
+        local userdata_dir = account_id and fs.join(steam_path, "userdata", account_id) or nil
+        if userdata_dir and fs.is_directory(userdata_dir) then
+            if string.match(user_block, '"MostRecent"%s*"1"') then
+                return ensure_grid_dir(userdata_dir, account_id)
             end
 
-            local grid_dir = fs.join(userdata_dir, "config", "grid")
-            if not fs.exists(grid_dir) then
-                local created, create_err = fs.create_directories(grid_dir)
-                if not created and not fs.is_directory(grid_dir) then
-                    logger:error("Could not create active Steam grid folder: " .. tostring(create_err))
-                    return nil
-                end
+            local timestamp = tonumber(string.match(user_block, '"Timestamp"%s*"(%d+)"'))
+            if string.match(user_block, '"AutoLogin"%s*"1"') and (timestamp or 0) > auto_login_timestamp then
+                auto_login_dir = userdata_dir
+                auto_login_account_id = account_id
+                auto_login_timestamp = timestamp or 0
             end
-            return grid_dir, account_id
+
+            if timestamp and timestamp > newest_timestamp then
+                newest_dir = userdata_dir
+                newest_account_id = account_id
+                newest_timestamp = timestamp
+            end
         end
     end
 
-    logger:error("Could not identify the active Steam account from loginusers.vdf")
+    if auto_login_dir then
+        logger:warn("loginusers.vdf has no MostRecent user; using the AutoLogin Steam account")
+        return ensure_grid_dir(auto_login_dir, auto_login_account_id)
+    end
+
+    if newest_dir then
+        logger:warn("loginusers.vdf has no MostRecent or AutoLogin user; using its newest valid Steam account")
+        return ensure_grid_dir(newest_dir, newest_account_id)
+    end
+
+    logger:error("Could not identify a Steam account with an existing userdata folder from loginusers.vdf")
     return nil
 end
 
