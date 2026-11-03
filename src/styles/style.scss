@@ -1,0 +1,291 @@
+@use 'sass:math';
+@use 'variables';
+@use 'mixins';
+@use 'modals/details';
+@use 'modals/filters';
+@use 'modals/gameselect';
+@use 'modals/logo_position';
+@use 'modals/official_assets';
+
+#sgdb-wrap {
+  --asset-size: 120px;
+  margin-top: variables.$topBarHeight;
+  height: calc(100% - variables.$topBarHeight);
+  background: var(--gpSystemDarkestGrey, #0E141B);
+
+  // Background for tab pages
+  div[class*="gamepadtabbedpage_TabHeaderRowWrapper"][class*="gamepadtabbedpage_Floating"],
+  div[class*="gamepadtabbedpage_TabHeaderRowWrapper"] {
+    background: #1B2838;
+  }
+
+  $motdHeight: 40px;
+  .motd-wrap {
+    display: flex;
+    gap: .5em;
+    margin-top: 1em;
+    .motd {
+      flex: 1;
+      @include mixins.flex-center;
+      position: relative;
+      background-size: cover;
+      background-repeat: no-repeat;
+      background-color: #05070a;
+      height: $motdHeight;
+      overflow: hidden;
+      @include mixins.cursor-outline(true);
+      transition:
+        outline-color ease-in-out 200ms,
+        transform ease-out 200ms;
+      &:hover {
+        transform: scale(1.01);
+        @include mixins.cursor-outline(false);
+      }
+    }
+    .motd-video-bg {
+      position: absolute;
+      width: 100%;
+      z-index: 0;
+    }
+    .motd-inner {
+      display: grid;
+      height: 100%;
+      grid-template-columns: 1fr 100%;
+      grid-template-rows: 100%;
+      column-gap: 1em;
+      align-items: center;
+      z-index: 1;
+      > img {
+        height: 100%;
+        grid-row: 1;
+      }
+      .motd-text {
+        display: flex;
+        flex-direction: column;
+        // don't like setting pixel values for fonts but have to be safe
+        .motd-title {
+          font-size: 15px;
+          line-height: 15px;
+          font-weight: 500;
+        }
+        .motd-subtitle {
+          font-size: 11px;
+          line-height: 11px;
+        }
+      }
+    }
+    .motd-hide {
+      @include mixins.flex-center;
+      padding: 0;
+      width: $motdHeight;
+      min-width: $motdHeight;
+    }
+  }
+
+  .tabcontents-wrap {
+    display: flex;
+    height: 100%;
+    width: 100%;
+    flex-direction: column;
+  }
+
+  .spinnyboi {
+    @include mixins.flex-center;
+    width: 100%;
+    position: fixed;
+    height: 100vh; // centering should be based on full device height
+    top: 0;
+    flex: 1;
+    left: 0;
+    right: 0;
+    z-index: variables.$zIndexAboveRing + 6; // above settings
+    background: variables.$color-toolbar-bg;
+    transition: opacity ease-out 250ms, z-index 0s;
+    will-change: opacity;
+    > img {
+      transform: scale(.75);
+      transition: transform ease-out 300ms;
+      will-change: transform;
+      margin-top: calc(var(--basicui-header-height) * -1); // center of screen
+    }
+    &.loaded {
+      z-index: -1;
+      opacity: 0;
+      transition-delay: 0ms, 300ms;
+      > img {
+        transform: scale(.6);
+      }
+    }
+  }
+
+  .sgdb-asset-toolbar {
+    display: flex;
+    width: 100%;
+    gap: var(--gpSpace-Gap, .6em);
+    // background-color: var(--gpSystemDarkestGrey, variables.$color-toolbar-bg);
+    .filter-buttons {
+      align-items: center;
+      display: flex;
+      gap: .5em;
+      > button {
+        min-width: auto;
+        flex: 1;
+        white-space: nowrap;
+      }
+    }
+    .size-slider {
+      flex: 1;
+      padding: .5em 1em;
+      justify-content: center;
+    }
+  }
+
+  #images-container {
+    display: grid;
+    padding-top: 1em;
+    padding-bottom: var(--gamepadui-current-footer-height);
+    justify-content: space-evenly;
+    grid-auto-flow: dense;
+    row-gap: 1em;
+    column-gap: .65em;
+    grid-template-columns: repeat(auto-fill, minmax(min(var(--asset-size), 100%), var(--asset-size)));
+    @include mixins.asset;
+  }
+
+  #local-images-container {
+    display: grid;
+    grid-template-columns: 30% 1fr;
+    gap: 1em;
+    margin-bottom: 2em;
+    .asset-label {
+      text-align: left;
+      color: #fff;
+      font-weight: 500;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      line-height: 20px;
+      margin-bottom: .5em;
+    }
+    .asset-wrap {
+      > .Panel {
+        position: relative;
+        .action-overlay {
+          display: none;
+          position: absolute;
+          gap: .25em;
+          bottom: 0;
+          right: 0;
+          padding: .5em;
+          z-index: 2;
+          .action-button {
+            @include mixins.flex-center;
+            cursor: pointer;
+            box-sizing: border-box;
+            width: 2.5em;
+            height: 2.5em;
+            border-radius: 2px;
+            background-color: rgba(#0e141b, .75);
+            padding: .65em;
+            transition: background-color 120ms ease;
+            > svg {
+              fill: #fff;
+              width: 100%;
+              height: 100%;
+            }
+            &.gpfocus,
+            &:hover {
+              background-color: rgba(#fff, .75);
+              > svg {
+                fill: #0e141b;
+              }
+            }
+          }
+        }
+        &.is-focused,
+        &:hover {
+          .action-overlay {
+            display: flex;
+          }
+        }
+      }
+
+      &-grid_p {
+        .asset {
+          padding-top: math.div(900, 600) * 100%;
+        }
+      }
+      &-hero {
+        .asset {
+          padding-top: math.div(1240, 3840) * 100%;
+        }
+        .asset-img {
+          object-fit: cover;
+          height: 100%;
+        }
+      }
+      &-logo {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        > .Panel.Focusable {
+          height: 100%;
+        }
+        .asset {
+          height: 100%;
+          .asset-img {
+            padding: .25em;
+            margin: -.25em auto;
+            width: auto;
+            max-width: 100%;
+            top: 50%;
+            transform: translateY(-50%);
+          }
+        }
+      }
+      &-grid_l {
+        .asset {
+          padding-top: math.div(215, 460) * 100%;
+        }
+      }
+      &-icon {
+        .asset {
+          max-width: 32px;
+          max-height: 32px;
+          padding-top: 32px;
+        }
+        // make buttons same size as container
+        .action-overlay {
+          padding: 0 !important;
+          .action-button {
+            width: 32px !important;
+            height: 32px !important;
+            padding: .45em !important;
+          }
+        }
+      }
+    }
+    .asset {
+      display: flex;
+      overflow: hidden;
+
+      .asset-img {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        width: -webkit-fill-available;
+        max-height: 100%;
+      }
+    }
+  }
+}
+
+@keyframes sgdb-fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "react-icons",
+  "version": "5.4.0",
+  "license": "MIT",
+  "type": "module",
+  "main": "index.tsx",
+  "types": "index.tsx"
+}

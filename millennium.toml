@@ -1,0 +1,19 @@
+[plugin]
+id = "steamgriddb"
+name = "SteamGridDB"
+version = "1.0"
+author = "DevsNate"
+description = "A SteamGridDB plugin for Millennium to apply and manage custom art assets from within Steam."
+
+[assets]
+resources = ["assets/*"]
+
+[backend]
+entry = "backend/main.lua"
+sources = ["backend/**/*.lua"]
+
+[frontend]
+entry = "frontend/index.tsx"
+
+[compiler]
+output_path = "dist/steamgriddb.star"

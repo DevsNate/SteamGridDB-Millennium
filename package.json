@@ -1,0 +1,35 @@
+{
+  "type": "module",
+  "name": "steamgriddb-millennium",
+  "version": "1.0",
+  "description": "A SteamGridDB plugin for Millennium to apply and manage custom art assets from within Steam.",
+  "author": "DevsNate",
+  "license": "GPL-3.0-or-later",
+  "upstream": {
+    "repository": "https://github.com/SteamGridDB/decky-steamgriddb",
+    "version": "1.8.1",
+    "commit": "26682f6a58b5dad774abe740ee3f9bad38296496"
+  },
+  "scripts": {
+    "dev": "starlight watch",
+    "build": "node -e \"require('fs').mkdirSync('dist',{recursive:true})\" && starlight pack --release && node scripts/checks/starlight-bundle.mjs",
+    "styles": "node scripts/build-styles.mjs",
+    "vendor": "node scripts/vendor.mjs",
+    "check": "node scripts/run-checks.mjs",
+    "sync-upstream": "node scripts/sync-upstream.mjs"
+  },
+  "devDependencies": {
+    "@steambrew/starlight": "^1.1.7",
+    "@types/react": "19.1.1",
+    "@types/react-dom": "19.1.1",
+    "async-wait-until": "^2.0.31",
+    "fengari": "0.1.5",
+    "just-debounce": "^1.1.0",
+    "qrcode.react": "^3.2.0",
+    "react-fast-compare": "^3.2.2",
+    "react-icons": "5.4.0",
+    "react-string-replace": "^1.1.1",
+    "sass": "^1.107.1",
+    "typescript": "^5.9.3"
+  }
+}

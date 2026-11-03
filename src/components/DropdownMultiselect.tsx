@@ -1,0 +1,133 @@
+import {
+  showContextMenu,
+  DialogButton,
+  Menu,
+  MenuItem,
+  DialogCheckbox,
+  DialogCheckboxProps,
+  Marquee,
+} from '@decky/ui';
+import { FC, useState, useEffect, useCallback, ReactNode } from 'react';
+
+import Chevron from './Chevron';
+import t from '../utils/i18n';
+
+const DropdownMultiselectItem: FC<{
+  value: any,
+  onSelect: (checked: boolean, value: any) => void,
+  checked: boolean
+} & DialogCheckboxProps> = ({
+  value,
+  onSelect,
+  checked: defaultChecked,
+  ...rest
+}) => {
+  const [checked, setChecked] = useState(defaultChecked);
+
+  useEffect(() => {
+    onSelect?.(checked, value);
+  }, [checked, onSelect, value]);
+
+  return (
+    <MenuItem
+      bInteractableItem
+      onClick={() => setChecked((x) => !x)}
+    >
+      <DialogCheckbox
+        style={{ marginBottom: 0, padding: 0 }}
+        className="decky_DropdownMultiselectItem_DialogCheckbox"
+        bottomSeparator="none"
+        {...rest}
+        onClick={() => setChecked((x) => !x)}
+        onChange={(checked) => setChecked(checked)}
+        controlled
+        checked={checked}
+      />
+    </MenuItem>
+  );
+};
+
+const DropdownMultiselect: FC<{
+  items: {
+    label: string,
+    value: any,
+  }[],
+  selected: any[],
+  onSelect: (selected: any[]) => void,
+  label: string
+}> = ({
+  label,
+  items,
+  selected,
+  onSelect,
+}) => {
+  const [itemsSelected, setItemsSelected] = useState<any>(selected);
+
+  const handleItemSelect = useCallback((checked: boolean, value: string | ReactNode) => {
+    setItemsSelected((x: any) => (checked ?
+      [...x.filter((y: any) => y !== value), value] :
+      x.filter((y: any) => y !== value)
+    ));
+  }, []);
+
+  useEffect(() => {
+    onSelect(itemsSelected);
+  }, [itemsSelected, onSelect]);
+
+  return (
+    <DialogButton
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        maxWidth: '100%',
+      }}
+      onClick={(evt) => {
+        evt.preventDefault();
+        showContextMenu(
+          <Menu
+            label={label}
+            cancelText={t('Button_Back', 'Back', true)}
+          >
+            <style>
+              {`
+              /*
+                Hacks:
+                  Allow clicking through so cursor hits contextMenuItem instead
+                  Inherit color from ".basiccontextmenu"
+              */
+              .decky_DropdownMultiselectItem_DialogCheckbox {
+                pointer-events: none;
+              }
+              .decky_DropdownMultiselectItem_DialogCheckbox > .DialogToggle_Label {
+                color: inherit;
+              }
+              `}
+            </style>
+            {items.map((x) => (
+              <DropdownMultiselectItem
+                key={x.value}
+                label={x.label}
+                value={x.value}
+                checked={itemsSelected.includes(x.value)}
+                onSelect={handleItemSelect}
+              />
+            ))}
+          </Menu>,
+          evt.currentTarget ?? window
+        );
+      }}
+    >
+      <Marquee>
+        {
+          selected.length > 0 ?
+            selected.map((x: any) => items[items.findIndex((v) => v.value === x)].label).join(', ') :
+            '…'
+        }
+      </Marquee>
+      <div style={{ flexGrow: 1, minWidth: '1ch' }} />
+      <Chevron style={{ height: '1em', flex: '0 0 1em' }} direction="down" />
+    </DialogButton>
+  );
+};
+
+export default DropdownMultiselect;

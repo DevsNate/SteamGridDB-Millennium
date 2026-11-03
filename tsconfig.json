@@ -1,0 +1,75 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": [
+      "DOM",
+      "DOM.Iterable",
+      "ES2022"
+    ],
+    "allowJs": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "module": "ESNext",
+    "moduleResolution": "Node",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "paths": {
+      "millennium": [
+        "./.millennium/lsp/ts"
+      ],
+      "@decky/api": [
+        "./frontend/shims/decky-api"
+      ],
+      "@decky/ui": [
+        "./frontend/shims/decky-ui"
+      ],
+      "@decky/ui/*": [
+        "./frontend/shims/decky-ui/*"
+      ],
+      "react-markdown": [
+        "./frontend/shims/react-markdown"
+      ],
+      "react-markdown/lib/complex-types": [
+        "./frontend/shims/react-markdown"
+      ],
+      "remark-gfm": [
+        "./frontend/shims/remark-gfm"
+      ],
+      "async-wait-until": [
+        "./frontend/vendor/async-wait-until"
+      ],
+      "just-debounce": [
+        "./frontend/vendor/just-debounce"
+      ],
+      "qrcode.react": [
+        "./frontend/vendor/qrcode.react"
+      ],
+      "react-fast-compare": [
+        "./frontend/vendor/react-fast-compare"
+      ],
+      "react-string-replace": [
+        "./frontend/vendor/react-string-replace"
+      ],
+      "react-icons": [
+        "./frontend/vendor/react-icons"
+      ],
+      "react-icons/*": [
+        "./frontend/vendor/react-icons/*"
+      ]
+    },
+    "typeRoots": [
+      "./.millennium/types",
+      "./node_modules/@types"
+    ]
+  },
+  "include": [
+    "frontend",
+    "src"
+  ]
+}

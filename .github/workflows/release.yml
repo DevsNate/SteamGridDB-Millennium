@@ -1,0 +1,46 @@
+name: Release
+
+# Push a tag such as v1.0 to build the plugin and publish a release
+# with steamgriddb.star attached.
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    permissions:
+      contents: write
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Check
+        run: pnpm run check
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          name: SteamGridDB for Millennium ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          files: dist/steamgriddb.star

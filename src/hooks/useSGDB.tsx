@@ -1,0 +1,338 @@
+import {
+  useState,
+  createContext,
+  FC,
+  useEffect,
+  useContext,
+  useCallback,
+  useMemo,
+  ReactNode,
+} from 'react';
+import { call, fetchNoCors, toaster } from '@decky/api';
+// Millennium: Starlight does not define ROLLUP_ENV; use the production environment shim.
+import { process } from '../../frontend/shims/decky-env';
+
+import MenuIcon from '../components/Icons/MenuIcon';
+import getAppOverview from '../utils/getAppOverview';
+import log from '../utils/log';
+import { ASSET_TYPE, MIMES, STYLES, DIMENSIONS } from '../constants';
+import getAppDetails from '../utils/getAppDetails';
+import showRestartConfirm from '../utils/showRestartConfirm';
+import getCurrentSteamUserId from '../utils/getCurrentSteamUserId';
+import getCustomLogoPosition from '../utils/getCustomLogoPosition';
+
+/*
+  special key only for use with this decky plugin
+  attempting to use this in your own projects will
+  cause you to be automatically banned and blacklisted
+*/
+// Millennium: No bundled API key; our backend adds the user's key.
+
+export const SGDB_API_BASE = process.env.ROLLUP_ENV === 'development' ? 'http://sgdb.test/api/v2' : 'https://www.steamgriddb.com/api/v2';
+
+export type SGDBContextType = {
+  appId: number | null;
+  setAppId: React.Dispatch<React.SetStateAction<number | null>>;
+  appOverview: AppStoreAppOverview;
+  searchAssets: (assetType: SGDBAssetType, options: {gameId?: number | null, filters?: any, page?: number, signal?: AbortSignal}) => Promise<Array<any>>;
+  searchGames: (term: string) => Promise<Array<any>>;
+  getSgdbGame: (sgdbGame: any) => Promise<any>;
+  changeAsset: (data: string, assetType: SGDBAssetType | eAssetType) => Promise<void>;
+  changeAssetFromUrl: (location: string, assetType: SGDBAssetType | eAssetType, path?: boolean) => Promise<void>;
+  clearAsset: (assetType: SGDBAssetType | eAssetType) => Promise<void>;
+}
+
+const getAmbiguousAssetType = (assetType: SGDBAssetType | eAssetType) => typeof assetType === 'number' ? assetType : ASSET_TYPE[assetType];
+
+const getApiParams = (assetType: SGDBAssetType, filters: any, page: number) => {
+  let adult = 'false';
+  let humor = 'any';
+  let epilepsy = 'any';
+  let oneoftag = '';
+
+  if (filters?.untagged === true) {
+    if (filters?.humor === false) {
+      humor = 'false';
+    }
+
+    if (filters?.adult === false) {
+      adult = 'false';
+    }
+
+    if (filters?.adult === true) {
+      adult = 'any';
+    }
+
+    if (filters?.epilepsy === false) {
+      epilepsy = 'false';
+    }
+  } else {
+    const selectedTags = [];
+    if (filters?.humor === true) {
+      humor = 'any';
+      selectedTags.push('humor');
+    }
+
+    if (filters?.adult === true) {
+      adult = 'any';
+      selectedTags.push('nsfw');
+    }
+
+    if (filters?.epilepsy === true) {
+      epilepsy = 'any';
+      selectedTags.push('epilepsy');
+    }
+
+    oneoftag = selectedTags.join(',');
+  }
+
+  return new URLSearchParams({
+    page: page.toString(),
+    styles:  filters?.styles ?? STYLES[assetType].default.join(','),
+    dimensions: filters?.dimensions ?? DIMENSIONS[assetType].default.join(','),
+    mimes: filters?.mimes ?? MIMES[assetType].default.join(','),
+    nsfw: adult,
+    humor,
+    epilepsy,
+    oneoftag,
+    types: [filters?._static && 'static', filters?.animated && 'animated'].filter(Boolean).join(','),
+  }).toString();
+};
+
+export const SGDBContext = createContext({});
+
+export const SGDBProvider: FC<{ children: ReactNode }> = ({ children }) => {
+  const [appId, setAppId] = useState<number>(0);
+  const [appOverview, setAppOverview] = useState<AppStoreAppOverview | null>(null);
+
+  const clearAsset: SGDBContextType['clearAsset'] = useCallback(async (assetType) => {
+    assetType = getAmbiguousAssetType(assetType);
+    if (assetType === ASSET_TYPE.icon) {
+      if (appOverview?.BIsShortcut()) {
+        const res = await call<[
+          appid: number | null,
+          owner_id: string,
+          path: string | null,
+        ], string>('set_shortcut_icon',
+          appId,
+          getCurrentSteamUserId(),
+          null // null removes the icon
+        );
+        if (res !== 'icon_is_same_path') showRestartConfirm();
+      } else {
+        // Millennium: Remove the custom icon so Steam downloads its own, instead of writing another custom icon.
+        await call<[appid: number | null]>('reset_steam_icon', appId);
+      }
+    } else {
+      await SteamClient.Apps.ClearCustomArtworkForApp(appId, assetType);
+      // ClearCustomArtworkForApp() resolves instantly instead of after clearing, so we need to wait a bit.
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }, [appId, appOverview]);
+
+  const changeAsset: SGDBContextType['changeAsset'] = useCallback(async (data, assetType) => {
+    assetType = getAmbiguousAssetType(assetType);
+    try {
+      await clearAsset(assetType);
+      await SteamClient.Apps.SetCustomArtworkForApp(appId, data, 'png', assetType);
+
+      // force create a position json if no custom position is set yet
+      // fixes blank logos on shortcuts
+      if (assetType === ASSET_TYPE.logo && appOverview?.BIsShortcut()) {
+        const logoPos = await getCustomLogoPosition(appId); // Loads from json
+        if (!logoPos) {
+          await window.appDetailsStore.SaveCustomLogoPosition(appOverview, { pinnedPosition: 'BottomLeft', nWidthPct: 50, nHeightPct: 50 });
+        }
+      }
+    } catch (error) {
+      log(error);
+      // Millennium: Let callers report failed writes instead of showing a false success.
+      throw error;
+    }
+  }, [appId, appOverview, clearAsset]);
+
+  const apiRequest = useCallback((url: string, signal?: AbortSignal): Promise<any[]> => {
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) return reject(new DOMException('Aborted', 'AbortError'));
+
+      const abortHandler = () => {
+        reject(new DOMException('Aborted', 'AbortError'));
+      };
+
+      signal?.addEventListener('abort', abortHandler);
+      fetchNoCors(`${SGDB_API_BASE}${url}`, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          // Millennium: Our backend adds the user's key.
+        },
+      }).then((res) => {
+        log(res);
+        if (res.status !== 200 && res.status >= 500) {
+          return reject(new Error('SGDB API request failed'));
+        }
+
+        try {
+          res.json().then((assetRes) => {
+            if (!assetRes.success) {
+              const apiErr = new Error(assetRes.errors.join(', '));
+              (apiErr as any).status = res.status;
+              return reject(apiErr);
+            }
+            return resolve(assetRes.data);
+          });
+        } catch (err: any) {
+          return reject(new Error(err.message));
+        }
+      }).finally(() => {
+        signal?.removeEventListener('abort', abortHandler);
+      });
+    });
+  }, []);
+
+  const getImageAsB64 = useCallback(async (location: string, path = false) : Promise<string | null> => {
+    log('downloading', location);
+    try {
+      return await call<[path: string], string>(path ? 'read_file_as_base64' : 'download_as_base64', location);
+    } catch (error) {
+      return null;
+    }
+  }, []);
+
+  const changeAssetFromUrl: SGDBContextType['changeAssetFromUrl'] = useCallback(async (url, assetType, path = false) => {
+    assetType = getAmbiguousAssetType(assetType);
+    if (assetType === ASSET_TYPE.icon) {
+      if (appOverview?.BIsShortcut()) {
+        const res = await call<[
+          appid: number | null,
+          owner_id: string,
+          path: string | null,
+        ], string | boolean>(path ? 'set_shortcut_icon_from_path' : 'set_shortcut_icon_from_url',
+          appId,
+          getCurrentSteamUserId(),
+          url
+        );
+
+        log('set_shortcut_icon result', res);
+        if (res === 'icon_is_same_path') {
+          // If the path is already the same as the current icon, we can force an icon re-read by setting the name to itself
+          SteamClient.Apps.SetShortcutName(appOverview.appid, appOverview.display_name);
+        } else if (res === true) {
+          // shortcuts.vdf was modified, can't figure out how to make Steam re-read it so just ask user to reboot
+          showRestartConfirm();
+        }
+      } else {
+        // Change default Steam icon by poisoning the cache like Boop does it
+        if (!appOverview?.icon_hash) {
+          throw new Error('Could not find the current icon hash for this app');
+        }
+
+        const res = await call<[
+          appid: number | null,
+          location: string,
+          icon_hash: string,
+        ], string | boolean>(path ? 'set_steam_icon_from_path' : 'set_steam_icon_from_url',
+          appId,
+          url,
+          appOverview.icon_hash
+        );
+        log('set_steam_icon result', res);
+      }
+    } else {
+      const data = await getImageAsB64(url, path);
+      if (!data) {
+        throw new Error('Failed to retrieve asset');
+      }
+      await changeAsset(data, assetType);
+    }
+  }, [appId, appOverview, changeAsset, getImageAsB64]);
+
+  const searchGames = useCallback(async (term: string) => {
+    try {
+      // encodeURIComponent twice to preserve some symbols
+      // api is equpped to handle various types of inputs so this is fine
+      const res = await apiRequest(`/search/autocomplete/${encodeURIComponent(encodeURIComponent(term))}`);
+      log('search games', res);
+      return res;
+    } catch (err: any) {
+      toaster.toast({
+        title: 'SteamGridDB API Error',
+        body: err.message,
+        icon: <MenuIcon fill="#f3171e" />,
+      });
+      return [];
+    }
+  }, [apiRequest]);
+
+  const searchAssets: SGDBContextType['searchAssets'] = useCallback(async (assetType, { gameId, filters = null, page = 0, signal }) => {
+    let type = '';
+    switch (assetType) {
+    case 'grid_p':
+    case 'grid_l':
+      type = 'grids';
+      break;
+    case 'hero':
+      type = 'heroes';
+      break;
+    case 'icon':
+      type = 'icons';
+      break;
+    case 'logo':
+      type = 'logos';
+      break;
+    }
+
+    const qs = getApiParams(assetType, filters, page);
+    log('asset search', gameId, qs);
+    return await apiRequest(`/${type}/${gameId ? 'game' : 'steam'}/${gameId ?? appId}?${qs}`, signal);
+  }, [apiRequest, appId]);
+
+  const getSgdbGame = useCallback(async (game: any) => {
+    try {
+      const gameRes = await apiRequest(`/games/id/${game.id}?platformdata=steam`);
+      log('sgdb game', gameRes);
+      return gameRes;
+    } catch (err: any) {
+      toaster.toast({
+        title: 'SteamGridDB API Error',
+        body: err.message,
+        icon: <MenuIcon fill="#f3171e" />,
+      });
+      return [];
+    }
+  }, [apiRequest]);
+
+  useEffect(() => {
+    if (appId) {
+      (async () => {
+        // Get details before overview or some games will be null.
+        await getAppDetails(appId);
+        const overview = await getAppOverview(appId);
+        log('overview', overview);
+        setAppOverview(overview);
+      })();
+    }
+  }, [appId]);
+
+  const value = useMemo(() => ({
+    appId,
+    appOverview,
+    setAppId,
+    searchAssets,
+    searchGames,
+    getSgdbGame,
+    changeAsset,
+    changeAssetFromUrl,
+    clearAsset,
+  }), [appId, appOverview, searchAssets, searchGames, getSgdbGame, changeAsset, changeAssetFromUrl, clearAsset]);
+
+  return (
+    <SGDBContext.Provider value={value}>
+      {children}
+    </SGDBContext.Provider>
+  );
+};
+
+export const useSGDB = () => useContext(SGDBContext) as SGDBContextType;
+
+export default useSGDB;

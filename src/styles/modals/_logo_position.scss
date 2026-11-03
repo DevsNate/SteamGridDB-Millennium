@@ -1,0 +1,205 @@
+@use "../mixins";
+@use "../variables";
+
+$color-guide: #008ada;
+@include mixins.modal('logo-position') {
+  .logo-positioner {
+    display: flex;
+    position: relative;
+    margin-top: calc(variables.$topBarHeight + 1em);
+    width: 100%;
+    overflow: hidden;
+    align-items: center;
+    z-index: 1;
+    &.is-mouse-resizing {
+      .logo-wrap-pos {
+        transition: none;
+      }
+      .logo-positioner-logo {
+        transition: none;
+        &-img {
+          transition: none;
+        }
+      }
+    }
+    &.spinnyboi {
+      height: var(--header-height, calc( 80px + 20vw )); // default-ish height to prevent jank when content is loaded in
+      > img {
+        margin: 0 auto;
+        width: 5em;
+        opacity: 0;
+        animation: 150ms linear 400ms 1 sgdb-fadeIn forwards;
+      }
+    }
+    // Guides are showing
+    &.logo-border {
+      .logo-wrap {
+        .logo-anchor-guide,
+        .guide-middlecontainer {
+          display: block;
+        }
+        .logo-positioner-logo {
+          outline: 3px $color-guide solid;
+          pointer-events: all;
+        }
+      }
+    }
+    &.pos-UpperLeft {
+      .logo-positioner-logo-img {
+        object-position: top left;
+      }
+      .logo-anchor-guide.guide-upperleft {
+        border-color: transparent;
+      }
+    }
+    &.pos-BottomLeft {
+      .logo-positioner-logo-img {
+        object-position: bottom left;
+      }
+      .logo-anchor-guide.guide-bottomleft {
+        border-color: transparent;
+      }
+    }
+    &.pos-UpperCenter {
+      .logo-positioner-logo-img {
+        object-position: top center;
+      }
+      .logo-anchor-guide.guide-top {
+        border-top-color: transparent;
+      }
+    }
+    &.pos-CenterCenter {
+      .logo-positioner-logo-img {
+        object-position: center;
+      }
+      .logo-anchor-guide.guide-mid {
+        border-color: transparent;
+      }
+    }
+    &.pos-BottomCenter {
+      .logo-positioner-logo-img {
+        object-position: bottom center;
+      }
+      .logo-anchor-guide.guide-bottom {
+        border-bottom-color: transparent;
+      }
+    }
+    .logo-outer-region {
+      position: absolute;
+      width: auto;
+      height: auto;
+      top: 16px;
+      bottom: 16px;
+      left: 26px;
+      right: 26px;
+    }
+    .logo-wrap {
+      position: absolute;
+      height: 100%;
+      top: 0;
+      width: 100%;
+      // anchor points
+      .logo-anchor-guide,
+      .guide-middlecontainer {
+        display: none; // hidden by default, shown with .logo-border
+        position: absolute;
+        z-index: 1;
+        box-sizing: border-box;
+      }
+      .logo-anchor-guide {
+        border-color: $color-guide;
+        border-width: 3px;
+        width: 12px;
+        height: 12px;
+        border-radius: 3px;
+        transition: border-color linear 200ms;
+        opacity: .65;
+        pointer-events: all;
+        &:hover {
+          cursor: pointer;
+          opacity: 1;
+        }
+      }
+      .guide-upperleft {
+        border-left-style: solid;
+        border-top-style: solid;
+        top: 0;
+        left: 0;
+      }
+      .guide-bottomleft {
+        border-left-style: solid;
+        border-bottom-style: solid;
+        bottom: 0;
+        left: 0;
+      }
+      .guide-middlecontainer {
+        width: 15px;
+        height: 100%;
+        left: 50%;
+        top: 0;
+        transform: translateX(-50%);
+        pointer-events: none;
+        z-index: 3; // above logo
+        .guide-top {
+          border-top-style: solid;
+          top: 0;
+        }
+        .guide-mid {
+          border-width: 3px;
+          width: 15px;
+          height: 15px;
+          top: 50%;
+          border-style: solid;
+          transform: translateY(-50%);
+        }
+        .guide-bottom {
+          border-bottom-style: solid;
+          bottom: 0;
+        }
+      }
+    }
+    .logo-wrap-pos {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      transform: translate(var(--logo-left), var(--logo-top));
+      transition: transform ease 250ms;
+      pointer-events: none;
+      z-index: 2;
+    }
+    .logo-positioner-logo {
+      display: flex;
+      align-items: flex-start;
+      position: relative;
+      z-index: 1;
+      width: var(--logo-width);
+      height: var(--logo-height);
+      transition: width ease 100ms, height ease 100ms;
+      cursor: move;
+      &-img {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        transition: object-position ease 250ms;
+      }
+    }
+    &-hero {
+      width: 100%;
+    }
+  }
+  .logo-positioner-instructions {
+    @include mixins.flex-center($y: false);
+    flex-wrap: wrap;
+    list-style: none;
+    gap: 2em;
+    li {
+      @include mixins.flex-center($x: false);
+      cursor: pointer;
+      gap: .75em;
+    }
+    svg {
+      width: 32px;
+      height: 32px;
+    }
+  }
+}

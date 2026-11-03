@@ -1,0 +1,8 @@
+{
+  "name": "react-fast-compare",
+  "version": "3.2.2",
+  "license": "MIT",
+  "type": "commonjs",
+  "main": "index.js",
+  "types": "index.d.ts"
+}
