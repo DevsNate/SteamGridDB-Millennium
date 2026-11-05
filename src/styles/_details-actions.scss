@@ -1,0 +1,52 @@
+// Millennium: the port's Details actions (frontend/details-actions.tsx) and its Plugins Hub link.
+.sgdb-modal-details {
+  .sgdb-details-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+    align-items: stretch;
+
+    > button {
+      height: 44px;
+      min-height: 44px;
+    }
+
+    > button:first-child {
+      flex: 1;
+      min-width: 0;
+    }
+
+    > .sgdb-details-link {
+      flex: 0 0 44px;
+      width: 44px;
+      height: 44px;
+      min-width: 44px;
+      min-height: 44px;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+  }
+
+  .sgdb-details-message {
+    margin-top: 8px;
+    overflow-wrap: anywhere;
+  }
+}
+
+.sgdbPluginsHubLink {
+  display: inline;
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  border-radius: 3px;
+
+  &:hover,
+  &.gpfocus {
+    color: #fff;
+    background: rgba(255, 255, 255, .18);
+    outline: 2px solid rgba(255, 255, 255, .18);
+  }
+}

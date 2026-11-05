@@ -1,8 +1,8 @@
 // Settings composition adapted from SteamGridDB/decky-steamgriddb, src/index.tsx.
-import { DialogButton, Field, Focusable, PanelSection, PanelSectionRow, TextField } from '@decky/ui';
+import { DialogButton, Field, Focusable, PanelSection, PanelSectionRow } from '@decky/ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ComponentType, ComponentProps } from 'react';
 import QuickAccessSettings from '../../src/components/qam-contents/QuickAccessSettings';
+import { ApiKeyField } from './api-key-field';
 import { SettingsProvider } from '../../src/hooks/useSettings';
 import { clearApiKey, getApiKeyStatus, setApiKey } from '../services/backend';
 import { bigPictureRootClasses } from '../desktop-window/big-picture-presentation';
@@ -10,14 +10,11 @@ import { registerPageWindow } from '../desktop-window/window-boundary';
 import { pluginSettingsStyles } from './panel-styles';
 import { openWebLink } from '../steam/open-web-link';
 
-const PasswordField = TextField as ComponentType<ComponentProps<typeof TextField> & { type: 'password'; autoComplete: 'off' }>;
-
 const ApiKeySettings = () => {
   const [status, setStatus] = useState<Awaited<ReturnType<typeof getApiKeyStatus>> | null>(null);
   const [key, setKey] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const inputRoot = useRef<HTMLDivElement>(null);
   useEffect(() => {
     let mounted = true;
     void getApiKeyStatus().then(result => {
@@ -51,15 +48,7 @@ const ApiKeySettings = () => {
           description="A personal API Key is required, free with a SteamGridDB account." childrenLayout="below">
           {/* One column for the D-pad: the key field, Save Key, then Get Key and Clear Key. */}
           <Focusable flow-children="column">
-            <Focusable ref={inputRoot} focusWithinClassName="sgdb-key-focus" onActivate={() => {
-              if (busy) return;
-              const input = inputRoot.current?.querySelector('input');
-              input?.focus();
-              input?.click();
-            }}>
-              <PasswordField label="Personal API Key" type="password" autoComplete="off" value={key}
-                disabled={busy} onChange={event => setKey(event.target.value)} />
-            </Focusable>
+            <ApiKeyField value={key} disabled={busy} onChange={setKey} />
             <Focusable className="sgdb-key-actions sgdb-key-save" focusWithinClassName="sgdb-key-focus">
               <DialogButton disabled={busy || !key.trim()} onClick={() => { void update(false); }}>Save Key</DialogButton>
             </Focusable>

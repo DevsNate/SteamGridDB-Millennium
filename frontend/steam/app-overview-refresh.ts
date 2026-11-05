@@ -11,7 +11,9 @@
 type Overrides = Record<string, unknown>;
 
 const overrides = new Map<number, Overrides>();
-let storeGuarded = false;
+// Overviews given their own InitFromProto, and the store's map with its original set, for unloading.
+const patchedOverviews = new Set<any>();
+let guardedStore: { apps: any; set: unknown; ownSet: boolean } | undefined;
 
 const appStoreOf = () => (window as any).appStore;
 
@@ -27,17 +29,41 @@ const withOverrides = (overview: any) => {
       Object.assign(this, overrides.get(this.appid));
       return result;
     };
+    overview.InitFromProto[OUR_WRAPPER] = true;
   }
+  // Copies made from a patched overview carry the wrapper too.
+  if (overview.InitFromProto?.[OUR_WRAPPER]) patchedOverviews.add(overview);
   return overview;
 };
 
+const OUR_WRAPPER = Symbol('SteamGridDB InitFromProto');
+
 const guardStore = (apps: any) => {
-  if (storeGuarded) return;
-  storeGuarded = true;
+  if (guardedStore) return;
   const set = apps.set;
+  guardedStore = { apps, set, ownSet: Object.prototype.hasOwnProperty.call(apps, 'set') };
   apps.set = function (this: unknown, appid: number, overview: unknown) {
     return set.call(this, appid, withOverrides(overview));
   };
+};
+
+/**
+ * Puts Steam's app store back when the plugin unloads. Icons already shown stay until Steam
+ * next updates those apps; their files on disk are unchanged.
+ */
+export const restoreAppOverviews = () => {
+  if (guardedStore) {
+    // The map's set is normally Map.prototype's, so removing our own property restores it.
+    const { apps, set, ownSet } = guardedStore;
+    if (ownSet) apps.set = set;
+    else delete apps.set;
+    guardedStore = undefined;
+  }
+  for (const overview of patchedOverviews) {
+    if (Object.prototype.hasOwnProperty.call(overview, 'InitFromProto') && overview.InitFromProto[OUR_WRAPPER]) delete overview.InitFromProto;
+  }
+  patchedOverviews.clear();
+  overrides.clear();
 };
 
 export const refreshAppOverview = (appid: number, changes: Overrides) => {

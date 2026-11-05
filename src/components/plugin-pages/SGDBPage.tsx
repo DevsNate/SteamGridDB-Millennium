@@ -1,4 +1,4 @@
-import { useParams } from '@decky/ui';
+import { Focusable, useParams } from '@decky/ui';
 import { useEffect, useState, VFC, useCallback } from 'react';
 
 import { AssetSearchContext } from '../../hooks/useAssetSearch';
@@ -10,10 +10,15 @@ import { upstreamStyle as style } from '../../../frontend/generated/upstream-sty
 
 import AssetTabs from './AssetTabs';
 
+// Millennium: With this, Steam moves focus to what's next to a focused element that goes away, on every tab. Without
+// it focus goes nowhere, and the next press can land anywhere.
+const keepFocus = { focusableIfEmpty: true } as object;
+
 const SGDBPage: VFC = () => {
   const { get } = useSettings();
   const { setAppId, appOverview } = useSGDB();
-  const { appid, assetType = 'grid_p' } = useParams<{ appid: string, assetType: SGDBAssetType | 'manage' }>();
+  // Millennium: Tab preferences can also select Manage or Collections.
+  const { appid, assetType = 'grid_p' } = useParams<{ appid: string, assetType: SGDBTabType }>();
   const [currentTab, setCurrentTab] = useState<string>();
 
   const onShowTab = useCallback((tabID: string) => {
@@ -26,8 +31,8 @@ const SGDBPage: VFC = () => {
 
   useEffect(() => {
     (async () => {
-      const positions: SGDBAssetType[] = await get('tabs_order', DEFAULT_TABS);
-      const hidden: SGDBAssetType[] = await get('tabs_hidden', []);
+      const positions: SGDBTabType[] = await get('tabs_order', DEFAULT_TABS);
+      const hidden: SGDBTabType[] = await get('tabs_hidden', []);
       let tabDefault = await get('tab_default', assetType);
       const filtered = positions.filter((x) => !hidden.includes(x));
 
@@ -46,11 +51,11 @@ const SGDBPage: VFC = () => {
       <style>
         {style}
       </style>
-      <div id="sgdb-wrap">
+      <Focusable id="sgdb-wrap" {...keepFocus}>
         <AssetSearchContext>
           <AssetTabs currentTab={currentTab} onShowTab={onShowTab} />
         </AssetSearchContext>
-      </div>
+      </Focusable>
     </>
   );
 };

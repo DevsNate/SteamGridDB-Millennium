@@ -4,6 +4,8 @@ import type { ComponentType, ReactNode } from 'react';
 export type NativeTab = {
   id: string;
   title: ReactNode;
+  /** Steam otherwise treats the title as a localization token. */
+  bTitleAlreadyLocalized?: boolean;
   content: ReactNode;
   footer?: Record<string, unknown>;
 };
@@ -13,6 +15,8 @@ export type NativeTabsProps = {
   onShowTab: (tabId: string) => void;
   tabs: NativeTab[];
   autoFocusContents?: boolean;
+  onCancelFromTabHeader?: () => void;
+  wrapAround?: boolean;
 };
 
 const REACT_MEMO = Symbol.for('react.memo');
@@ -50,10 +54,7 @@ const findSteamTabs = (): ComponentType<NativeTabsProps> | null => {
       return source.includes('autoFocusContents') || (source.includes('tabs:') && source.includes('BIsFeatureBlocked'));
     });
 
-  if (found) {
-    console.info('[SteamGridDB] Using Steam\'s native Tabs');
-    return found as ComponentType<NativeTabsProps>;
-  }
+  if (found) return found as ComponentType<NativeTabsProps>;
   console.warn('[SteamGridDB] Steam\'s native Tabs were not found; using the fallback tab bar', {
     moduleFound: Boolean(module),
     exportCount: exports.length,

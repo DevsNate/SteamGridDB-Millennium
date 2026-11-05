@@ -14,8 +14,10 @@ import useSettings from '../../hooks/useSettings';
 import ResultsStateBar from '../ResultsStateBar';
 import LogoPositionerModal from '../../modals/LogoPositionerModal';
 import OfficialAssetsModal from '../../modals/OfficialAssetsModal';
+import { keepColumn } from '../../../frontend/collections/nav';
 // Millennium: Decky announcements are excluded from this port.
 import { onSettingChanged } from '../../../frontend/settings/store'; // Millennium: Hide Authors setting.
+import { rememberArtwork } from '../../../frontend/services/backend'; // Millennium: For the Manage tab's collection button.
 
 const AssetTab: FC<{ assetType: SGDBAssetType }> = ({ assetType }) => {
   const { get } = useSettings();
@@ -82,6 +84,7 @@ const AssetTab: FC<{ assetType: SGDBAssetType }> = ({ assetType }) => {
       try {
         setDownloadingId(assetId);
         await changeAssetFromUrl(url, assetType);
+        if (appOverview) await rememberArtwork(appOverview.appid, assetType, assetId); // Millennium
         toaster.toast({
           title: appOverview?.display_name,
           body: t('MSG_ASSET_APPLY_SUCCESS', '{assetType} has been successfully applied!').replace('{assetType}', SGDB_ASSET_TYPE_READABLE[assetType]),
@@ -188,6 +191,7 @@ const AssetTab: FC<{ assetType: SGDBAssetType }> = ({ assetType }) => {
         ref={mainContentRef}
         id="images-container"
         style={sizingStyles}
+        {...keepColumn} // Millennium: Moving here from the toolbar keeps the column.
       >
         {!tabLoading && (
           <>

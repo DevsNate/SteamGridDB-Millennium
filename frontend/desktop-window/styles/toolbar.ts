@@ -20,10 +20,31 @@ export const artworkToolbarStyles = `
   min-height: var(--sgdb-toolbar-height) !important;
   min-width: 0 !important;
   margin: 0 !important;
+  position: relative !important;
   padding: 0 16px !important;
   border-radius: 3px !important;
   background: #23262e !important;
 }
+
+/* Steam's slider always turns its focus ring off, so this repeats the ring: same outline, same animation.
+   It's a separate layer because the ring's blink fades whatever it's on. */
+#sgdb-wrap .sgdb-asset-toolbar .size-slider.gpfocus::after,
+#sgdb-wrap .sgdb-asset-toolbar .size-slider.gpfocuswithin::after,
+#sgdb-wrap .sgdb-collection-replace:has(.gpfocus)::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 3px;
+  pointer-events: none;
+  outline: 2px solid hsla(0, 0%, 100%, .6);
+  outline-offset: 2px;
+  animation: sgdb-ring-flash .5s ease, sgdb-ring-grow .4s ease, sgdb-ring-fade .4s ease, sgdb-ring-blink 1.2s ease-in-out .4s 20;
+}
+
+@keyframes sgdb-ring-flash { 0% { background-color: hsla(0, 0%, 100%, .08); } 100% { background-color: hsla(0, 0%, 100%, 0); } }
+@keyframes sgdb-ring-grow { 0% { outline: 12px solid; } 100% { outline: 2px solid; } }
+@keyframes sgdb-ring-fade { 0% { outline-color: hsla(0, 0%, 100%, 0); } 100% { outline-color: hsla(0, 0%, 100%, .6); } }
+@keyframes sgdb-ring-blink { 50% { opacity: .4; } }
 
 #sgdb-wrap .size-slider > div,
 #sgdb-wrap .size-slider > div > div,

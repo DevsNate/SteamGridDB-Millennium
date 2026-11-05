@@ -3,6 +3,7 @@
 // upstream's get_setting can read them synchronously afterwards. The API Key is
 // not a setting: it stays in the backend, because config reaches the frontend.
 import { pluginConfig, subscribePluginConfig } from 'millennium';
+import { withCollectionsTab } from '../collections/tabs';
 
 type SettingListener = (key: string, value: unknown) => void;
 
@@ -29,7 +30,8 @@ export function loadSettings(): Promise<void> {
 }
 
 export function readSetting(key: string, fallback: unknown): unknown {
-  return values.has(key) ? values.get(key) : fallback;
+  const value = values.has(key) ? values.get(key) : fallback;
+  return key === 'tabs_order' ? withCollectionsTab(value) : value;
 }
 
 export async function writeSetting(key: string, value: unknown): Promise<void> {

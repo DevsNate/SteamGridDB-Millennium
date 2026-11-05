@@ -92,7 +92,7 @@ vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../../frontend/steam
     millennium: { MenuItem: 'MenuItem' },
     'react/jsx-runtime': { jsx: (type, props, key) => ({ type, props, key }) },
     '../library/styles': { attachLibraryStyles: (owner) => attached.push(owner) },
-    './windows': {},
+    './windows': { BIG_PICTURE_POPUP: /^SP BPM(_uid\d+)?$/ },
   })[name],
 });
 const other = { eCreationFlags: 1 };

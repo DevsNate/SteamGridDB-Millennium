@@ -15,6 +15,7 @@ import { PluginSettingsPage } from './settings/panel';
 import { initializeLibraryPatches, disposeLibraryPatches } from './library/patches';
 import { loadPluginAssets } from './services/plugin-assets';
 import { loadSettings } from './settings/store';
+import { restoreAppOverviews } from './steam/app-overview-refresh';
 
 const normalizeAppIdText = (value: unknown): string | null => {
   const text = String(value ?? '').trim();
@@ -101,6 +102,7 @@ export default definePlugin(() => ({
   content: <PluginSettingsPage />,
   onDismount() {
     disposeLibraryPatches();
+    restoreAppOverviews();
     routerHook.removeRoute('/steamgriddb/:appid/:assetType?');
   },
 }));

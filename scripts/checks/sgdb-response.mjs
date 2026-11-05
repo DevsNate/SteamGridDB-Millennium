@@ -73,4 +73,13 @@ assert.equal(rejections, 1, 'A rejected Key tells the artwork page');
 response = false;
 assert.equal((await shim.fetchNoCors('https://www.steamgriddb.com/api/v2/search/autocomplete/none')).status, 502);
 await assert.rejects(shim.fetchNoCors('https://example.com/api/v2/grids/steam/367520'), /only supports/);
+// An HTML error page is a failed reply with a readable message, never a thrown parse error.
+response = '<!doctype html><title>502 Bad Gateway</title>';
+const htmlReply = await shim.fetchNoCors('https://www.steamgriddb.com/api/v2/grids/steam/367520');
+assert.equal(htmlReply.ok, false);
+assert.match((await htmlReply.json()).errors[0], /unexpected response/);
+assert.throws(() => responses.parseResponse(response), /unexpected response/);
+// upstream's apiRequest settles when the backend call itself fails.
+const useSgdb = readFileSync(new URL('../../src/hooks/useSGDB.tsx', import.meta.url), 'utf8');
+assert.match(useSgdb, /\}\)\.catch\(reject\)\.finally\(/, 'apiRequest rejects on a failed backend call');
 console.log('SGDB response checks passed: native objects, JSON text, empty arrays/null, errors, rejected Key, collections and Decky fetch contract.');

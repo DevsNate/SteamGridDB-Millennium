@@ -31,7 +31,7 @@ local fs = require("fs")
 local json = require("json")
 
 local SGDB_API_BASE = "https://www.steamgriddb.com/api/v2"
-local USER_AGENT = "steamgriddb-millennium/1.0"
+local USER_AGENT = "steamgriddb-millennium/1.1"
 -- Millennium v3.3.1 cancels child RPC calls after 30 seconds. Leave enough
 -- headroom for response parsing, image conversion, and filesystem work.
 local RPC_NETWORK_TIMEOUT_SECONDS = 20
@@ -58,13 +58,30 @@ local function validate_appid(value)
     return string.format("%.0f", appid)
 end
 
+-- Artwork comes from SteamGridDB's CDN or, for official art, Steam's.
+local ARTWORK_DOMAINS = { "steamgriddb.com", "steamstatic.com" }
+
+local function is_artwork_host(host)
+    for _, domain in ipairs(ARTWORK_DOMAINS) do
+        if host == domain or string.sub(host, -(#domain + 1)) == "." .. domain then
+            return true
+        end
+    end
+    return false
+end
+
 local function validate_https_url(value)
     local url = trim(value)
-    if url == "" or #url > 4096 or string.find(url, "[%z\1-\31\127]") then
+    if url == "" or #url > 4096 or string.find(url, "[%z\1-\31\127\\]") then
         return nil, "Artwork URL is invalid."
     end
-    if not string.match(url, "^https://[^/%?#@]+/") then
+    -- No user info or port: the host is everything up to the first slash.
+    local host = string.match(url, "^https://([%w%.%-]+)/")
+    if not host then
         return nil, "Artwork URL must use HTTPS."
+    end
+    if not is_artwork_host(string.lower(host)) then
+        return nil, "Artwork can only be downloaded from SteamGridDB or Steam."
     end
     return url
 end
@@ -128,7 +145,8 @@ local function download_validated(url, maximum_bytes, allowed_formats, label)
     local temp_path = fs.join(temp_dir, "steamgriddb-millennium-" .. label .. "-" .. utils.uuid() .. ".download")
     local call_ok, result, download_err = pcall(http.download, url, temp_path, {
         timeout = RPC_NETWORK_TIMEOUT_SECONDS,
-        follow_redirects = true,
+        -- A redirect could lead off the allowed hosts. Neither CDN redirects artwork.
+        follow_redirects = false,
         verify_ssl = true,
         user_agent = USER_AGENT,
     })
@@ -172,14 +190,18 @@ local function load_settings()
     settings.api_key = trim(settings.api_key)
 end
 
-local function save_settings()
-    if not fs.is_directory(PLUGIN_DIR) then
-        local created, create_err = fs.create_directories(PLUGIN_DIR)
-        if not created and not fs.is_directory(PLUGIN_DIR) then
-            logger:error("Could not create SteamGridDB data directory: " .. tostring(create_err))
-            return false
-        end
+local function ensure_data_dir()
+    if fs.is_directory(PLUGIN_DIR) then return true end
+    local created, create_err = fs.create_directories(PLUGIN_DIR)
+    if not created and not fs.is_directory(PLUGIN_DIR) then
+        logger:error("Could not create SteamGridDB data directory: " .. tostring(create_err))
+        return false
     end
+    return true
+end
+
+local function save_settings()
+    if not ensure_data_dir() then return false end
     local ok, err = utils.write_file(SETTINGS_FILE, json.encode(settings))
     if not ok then
         logger:error("Could not save SteamGridDB settings: " .. tostring(err))
@@ -200,6 +222,14 @@ end
 
 local function api_failure(message)
     return json.encode({ success = false, errors = { tostring(message) } })
+end
+
+-- Error pages from SteamGridDB or its proxy are HTML, not the API's JSON envelope.
+local function unexpected_body(res)
+    if type(res.body) == "string" and string.match(res.body, "^%s*[{%[]") then
+        return nil
+    end
+    return api_failure("SteamGridDB returned an unexpected response (HTTP " .. tostring(res.status) .. "). Try again later.")
 end
 
 local function api_key_missing()
@@ -247,7 +277,7 @@ function sgdb_request(path)
         return api_key_rejected()
     end
 
-    return res.body
+    return unexpected_body(res) or res.body
 end
 
 ---@ffi
@@ -306,7 +336,170 @@ function add_asset_to_collection(collection_id, route)
         return api_failure("SteamGridDB returned an empty collection response (HTTP " .. tostring(res.status) .. ").")
     end
 
-    return res.body
+    return unexpected_body(res) or res.body
+end
+
+-- Collections (website API) ----------------------------------------------
+--
+-- The v2 API can't read a collection's contents, so Collections
+-- uses the public API behind SteamGridDB's own collection pages. It needs no
+-- key, and none is sent. It's undocumented and may change.
+
+local SGDB_PUBLIC_BASE = "https://www.steamgriddb.com/api/public"
+local COLLECTION_PAGE_SIZE = 48
+local MAX_GAME_LINKS_BYTES = 4 * 1024 * 1024
+-- A reply is limited to 8 MB, and JSON text grows when it's sent as a string.
+local MAX_SAVED_COLLECTION_BYTES = 3 * 1024 * 1024
+-- Every opened collection is saved, so only the most recent ones are kept (at most 60 MB).
+local MAX_SAVED_COLLECTIONS = 20
+local SAVED_COLLECTIONS_DIR = fs.join(PLUGIN_DIR, "collections")
+
+local function validate_collection_id(value)
+    local id = tonumber(value)
+    if not id or id <= 0 or id ~= math.floor(id) or id > 2147483647 then
+        return nil
+    end
+    return id
+end
+
+local function public_failure(res, err)
+    if not res then
+        return api_failure("SteamGridDB request failed: " .. tostring(err))
+    end
+    if not res.body or res.body == "" then
+        return api_failure("SteamGridDB returned an empty response (HTTP " .. tostring(res.status) .. ").")
+    end
+    if res.status < 200 or res.status >= 300 then
+        return api_failure("SteamGridDB collection request failed (HTTP " .. tostring(res.status) .. ").")
+    end
+    return unexpected_body(res)
+end
+
+---@ffi
+---@param collection_id number
+---@return string
+function get_public_collection(collection_id)
+    local id = validate_collection_id(collection_id)
+    if not id then
+        return api_failure("Invalid SteamGridDB collection ID.")
+    end
+    local res, err = http.get(string.format("%s/collection/%d", SGDB_PUBLIC_BASE, id), {
+        headers = { ["Accept"] = "application/json" },
+        timeout = RPC_NETWORK_TIMEOUT_SECONDS,
+        user_agent = USER_AGENT,
+    })
+    return public_failure(res, err) or res.body
+end
+
+-- Pages start at 0. Ask only for types the collection's counts include: an
+-- empty type makes the website API fail instead of returning no assets.
+---@ffi
+---@param collection_id number
+---@param asset_type string
+---@param page number
+---@return string
+function get_public_collection_assets(collection_id, asset_type, page)
+    local allowed_asset_types = { grid = true, hero = true, logo = true, icon = true }
+    local id = validate_collection_id(collection_id)
+    page = tonumber(page)
+    if not id then
+        return api_failure("Invalid SteamGridDB collection ID.")
+    end
+    if not allowed_asset_types[asset_type] then
+        return api_failure("Unsupported SteamGridDB collection asset type.")
+    end
+    if not page or page < 0 or page ~= math.floor(page) or page > 10000 then
+        return api_failure("Invalid page.")
+    end
+    local body = json.encode({ asset_type = asset_type, collection_id = id, page = page, limit = COLLECTION_PAGE_SIZE })
+    -- Use request explicitly: older Millennium post helpers lose their options.
+    local res, err = http.request(SGDB_PUBLIC_BASE .. "/search/assets", {
+        method = "POST",
+        data = body,
+        headers = { ["Accept"] = "application/json", ["Content-Type"] = "application/json" },
+        timeout = RPC_NETWORK_TIMEOUT_SECONDS,
+        user_agent = USER_AGENT,
+    })
+    return public_failure(res, err) or res.body
+end
+
+-- Which Steam apps each SteamGridDB game links to, so a game is only looked up
+-- once. Library ownership is never stored: it's always read live from Steam.
+---@ffi
+---@return string
+function get_game_links()
+    return utils.read_file(fs.join(PLUGIN_DIR, "game_links.json")) or "{}"
+end
+
+---@ffi
+---@param links string JSON object
+---@return boolean
+function save_game_links(links)
+    if type(links) ~= "string" or #links > MAX_GAME_LINKS_BYTES then return false end
+    local ok, decoded = pcall(json.decode, links)
+    if not ok or type(decoded) ~= "table" or not ensure_data_dir() then return false end
+    local written, err = utils.write_file(fs.join(PLUGIN_DIR, "game_links.json"), links)
+    if not written then
+        logger:error("Could not save SteamGridDB game links: " .. tostring(err))
+        return false
+    end
+    return true
+end
+
+-- A collection's contents, so it opens right away. The frontend validates what it reads back.
+local function saved_collection_path(collection_id)
+    local id = validate_collection_id(collection_id)
+    return id and fs.join(SAVED_COLLECTIONS_DIR, string.format("%d.json", id)) or nil
+end
+
+---@ffi
+---@param collection_id number
+---@return string
+function get_saved_collection(collection_id)
+    local path = saved_collection_path(collection_id)
+    return path and utils.read_file(path) or "null"
+end
+
+-- Removes the oldest saved collections past the limit, never the one just written.
+local function prune_saved_collections(keep_path)
+    local saved = {}
+    for _, entry in ipairs(fs.list(SAVED_COLLECTIONS_DIR) or {}) do
+        if entry.is_file and string.match(entry.name, "^%d+%.json$") and entry.path ~= keep_path then
+            saved[#saved + 1] = { path = entry.path, time = tonumber(fs.last_write_time(entry.path)) or 0 }
+        end
+    end
+    table.sort(saved, function(a, b) return a.time > b.time end)
+    for index = MAX_SAVED_COLLECTIONS, #saved do
+        fs.remove(saved[index].path)
+    end
+end
+
+---@ffi
+---@param collection_id number
+---@param contents string JSON object
+---@return boolean
+function save_collection(collection_id, contents)
+    local path = saved_collection_path(collection_id)
+    if not path or type(contents) ~= "string" or #contents > MAX_SAVED_COLLECTION_BYTES then return false end
+    if not ensure_data_dir() then return false end
+    if not fs.is_directory(SAVED_COLLECTIONS_DIR) and not fs.create_directories(SAVED_COLLECTIONS_DIR) then return false end
+    local written, err = utils.write_file(path, contents)
+    if not written then
+        logger:error("Could not save SteamGridDB collection: " .. tostring(err))
+        return false
+    end
+    prune_saved_collections(path)
+    return true
+end
+
+---@ffi
+---@param collection_id number
+---@return boolean
+function delete_saved_collection(collection_id)
+    local path = saved_collection_path(collection_id)
+    if not path then return false end
+    if fs.exists(path) then fs.remove(path) end
+    return true
 end
 
 ---@ffi
@@ -568,6 +761,177 @@ local function resolve_active_grid_dir(steam_id)
         logger:warn("No userdata folder for the signed-in Steam account " .. account_id)
     end
     return grid_dir_from_login_users()
+end
+
+-- Which artwork types each app already has a custom file for in the grid
+-- folder, so Collections can leave the user's own artwork alone.
+local CUSTOM_ARTWORK_STEMS = {
+    grid_p = "%sp",
+    grid_l = "%s",
+    hero = "%s_hero",
+    logo = "%s_logo",
+    icon = "%s_icon",
+}
+
+local CUSTOM_ARTWORK_EXTENSIONS = { png = true, jpg = true, jpeg = true, webp = true, gif = true, ico = true }
+
+-- Steam keeps only the image, so this keeps which SteamGridDB artwork it was.
+-- The file's size goes with it: if the image was replaced since, from Steam's
+-- own dialog or a local file, the artwork ID no longer describes it.
+
+local APPLIED_ARTWORK_FILE = fs.join(PLUGIN_DIR, "applied_artwork.json")
+local applied_artwork
+
+local function read_applied_artwork()
+    if not applied_artwork then
+        local ok, saved = pcall(json.decode, utils.read_file(APPLIED_ARTWORK_FILE) or "{}")
+        applied_artwork = ok and type(saved) == "table" and saved or {}
+    end
+    return applied_artwork
+end
+
+local function save_applied_artwork()
+    return ensure_data_dir() and utils.write_file(APPLIED_ARTWORK_FILE, json.encode(applied_artwork)) and true or false
+end
+
+local function files_size(paths)
+    local size = 0
+    for _, path in ipairs(paths) do
+        size = size + (tonumber(fs.file_size(path)) or 0)
+    end
+    return size
+end
+
+---@ffi
+---@param appids string JSON array of app IDs
+---@param steam_id string
+---@return table
+function get_custom_artwork(appids, steam_id)
+    local ok, list = pcall(json.decode, tostring(appids or ""))
+    if not ok or type(list) ~= "table" or #list > 50000 then
+        return { success = false, error = "Invalid app ID list." }
+    end
+    for key, _ in pairs(list) do
+        if type(key) ~= "number" or key < 1 or key > #list or key ~= math.floor(key) then
+            return { success = false, error = "Invalid app ID list." }
+        end
+    end
+    local account_id = steam_account_id_from_steam_id64(steam_id)
+    if not account_id then
+        return { success = false, error = "Could not identify the signed-in Steam account." }
+    end
+    for _, value in ipairs(list) do
+        if not validate_appid(value) then
+            return { success = false, error = "Invalid Steam App ID." }
+        end
+    end
+    local grid_dir = fs.join(millennium.steam_path(), "userdata", account_id, "config", "grid")
+    -- Read only the explicit account. fs.exists hides access errors, so confirm
+    -- a missing grid folder by listing its parent rather than assuming no art.
+    local entries, scan_err = fs.list(grid_dir)
+    if not entries then
+        local parent = fs.list(fs.join(millennium.steam_path(), "userdata", account_id, "config"))
+        if parent then
+            local found = false
+            for _, entry in ipairs(parent) do
+                if entry.name == "grid" then found = true end
+            end
+            if not found then return { success = true, custom = {}, applied = {} } end
+        end
+        return { success = false, error = "Could not check existing custom artwork: " .. tostring(scan_err) }
+    end
+    -- Only images count: <appid>.json is the saved logo position, not a wide capsule.
+    local images = {}
+    for _, entry in ipairs(entries) do
+        if entry.is_file and CUSTOM_ARTWORK_EXTENSIONS[(entry.name:match("%.(%w+)$") or ""):lower()] then
+            local stem = fs.stem(entry.name)
+            images[stem] = images[stem] or {}
+            table.insert(images[stem], entry.path)
+        end
+    end
+    local records = read_applied_artwork()
+    local custom, applied = {}, {}
+    for _, value in ipairs(list) do
+        local appid = validate_appid(value)
+        if appid then
+            local types, known = {}, {}
+            for asset_type, pattern in pairs(CUSTOM_ARTWORK_STEMS) do
+                local paths = images[string.format(pattern, appid)]
+                if paths then
+                    table.insert(types, asset_type)
+                    local record = records[account_id .. ":" .. appid .. ":" .. asset_type]
+                    if record and record.size == files_size(paths) then
+                        known[asset_type] = { id = record.id, collection = record.collection == true }
+                    end
+                end
+            end
+            if #types > 0 then
+                custom[tostring(appid)] = types
+            end
+            if next(known) then
+                applied[tostring(appid)] = known
+            end
+        end
+    end
+    return { success = true, custom = custom, applied = applied }
+end
+
+-- Applied artwork --------------------------------------------------------
+
+-- The record's key and the size of the file Steam shows, or nil for invalid arguments.
+local function applied_artwork_file(appid, asset_type, steam_id)
+    local safe_appid = validate_appid(appid)
+    local account_id = steam_account_id_from_steam_id64(steam_id)
+    local pattern = CUSTOM_ARTWORK_STEMS[asset_type]
+    if not safe_appid or not account_id or not pattern then return nil end
+    local stem = string.format(pattern, safe_appid)
+    local paths = {}
+    for _, entry in ipairs(fs.list(fs.join(millennium.steam_path(), "userdata", account_id, "config", "grid")) or {}) do
+        if entry.is_file and fs.stem(entry.name) == stem and CUSTOM_ARTWORK_EXTENSIONS[(entry.name:match("%.(%w+)$") or ""):lower()] then
+            table.insert(paths, entry.path)
+        end
+    end
+    return account_id .. ":" .. safe_appid .. ":" .. asset_type, files_size(paths)
+end
+
+-- Artwork from a collection can be replaced by that collection's next apply.
+-- Artwork picked one at a time in an artwork tab counts as the user's own.
+---@ffi
+---@param appid number
+---@param asset_type string
+---@param artwork_id number
+---@param steam_id string
+---@param from_collection boolean
+---@return boolean
+function remember_artwork(appid, asset_type, artwork_id, steam_id, from_collection)
+    local key, size = applied_artwork_file(appid, asset_type, steam_id)
+    local id = validate_collection_id(artwork_id)
+    if not key or not id or size == 0 then return false end
+    read_applied_artwork()[key] = { id = id, size = size, collection = from_collection == true or nil }
+    return save_applied_artwork()
+end
+
+---@ffi
+---@param appid number
+---@param asset_type string
+---@param steam_id string
+---@return boolean
+function forget_artwork(appid, asset_type, steam_id)
+    local key = applied_artwork_file(appid, asset_type, steam_id)
+    if not key then return false end
+    read_applied_artwork()[key] = nil
+    return save_applied_artwork()
+end
+
+---@ffi
+---@param appid number
+---@param asset_type string
+---@param steam_id string
+---@return number 0 if the game doesn't show artwork we know
+function get_applied_artwork(appid, asset_type, steam_id)
+    local key, size = applied_artwork_file(appid, asset_type, steam_id)
+    local entry = key and read_applied_artwork()[key]
+    return entry and entry.size == size and entry.id or 0
 end
 
 local function remove_files_with_stem(dir, stem)

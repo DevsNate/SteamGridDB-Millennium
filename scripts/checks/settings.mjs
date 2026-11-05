@@ -86,16 +86,60 @@ assert.equal(renderGate().props.children.type, Settings, 'Retry mounts the artwo
 effectCleanup();
 assert.equal(listening, 0, 'Leaving the page stops listening for rejections');
 
+// The setup view saves the Key itself, then checks it again; a failed save stays on the view.
+{
+  const slots = [];
+  let at = 0;
+  const saved = [];
+  let saveResult = { success: true };
+  let retries = 0;
+  const viewExports = {};
+  vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../../frontend/settings/missing-key-view.tsx', import.meta.url), 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
+  }).outputText, { exports: viewExports, Error, require: name => ({
+    react: { useState(initial) { const i = at++; if (!(i in slots)) slots[i] = initial; return [slots[i], value => { slots[i] = value; }]; } },
+    'react/jsx-runtime': { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) },
+    '@decky/ui': { DialogBody: 'body', DialogBodyText: 'text', DialogButton: 'button', DialogControlsSection: 'section', DialogHeader: 'header', Field: 'field' },
+    '../services/backend': { setApiKey: async ({ api_key }) => { saved.push(api_key); return saveResult; } },
+    '../steam/open-web-link': { openWebLink: async () => {} },
+    './api-key-field': { ApiKeyField: 'keyfield' },
+  })[name] });
+  const find = (tree, test) => {
+    if (!tree || typeof tree !== 'object') return undefined;
+    if (test(tree)) return tree;
+    for (const child of [tree.props?.children].flat()) { const found = find(child, test); if (found) return found; }
+  };
+  const view = () => { at = 0; return viewExports.MissingApiKeyView({ onRetry: () => { retries++; } }); };
+  const saveButton = () => find(view(), node => node.props?.children === 'Save Key');
+  assert.equal(saveButton().props.disabled, true, 'Nothing to save yet');
+  find(view(), node => node.type === 'keyfield').props.onChange('my-key');
+  saveResult = { success: false, error: 'Could not save the API Key.' };
+  saveButton().props.onClick();
+  await new Promise(resolve => setTimeout(resolve));
+  assert.equal(retries, 0);
+  assert.ok(find(view(), node => node.props?.children === 'Could not save the API Key.'), 'A failed save says so');
+  saveResult = { success: true };
+  saveButton().props.onClick();
+  await new Promise(resolve => setTimeout(resolve));
+  assert.deepEqual(saved, ['my-key', 'my-key']);
+  assert.equal(retries, 1, 'A saved Key is checked right away');
+  assert.equal(find(view(), node => node.type === 'keyfield').props.value, '', 'The field is cleared after saving');
+}
+
 // Settings store: one config load, synchronous reads after it, change events
 // for our own writes and for Millennium's pushes, defaults when loading fails.
-const config = { squares: true, glow: 25 };
+const config = { squares: true, glow: 25, tabs_order: ['hero', 'manage', 'icon'], tabs_hidden: ['hero'], tab_default: 'icon' };
 let configCalls = 0;
 let configFails = true;
 let pushChange;
 const storeExports = {};
+const tabsExports = {};
+vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../../frontend/collections/tabs.ts', import.meta.url), 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+}).outputText, { exports: tabsExports });
 vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../../frontend/settings/store.ts', import.meta.url), 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-}).outputText, { exports: storeExports, console: { error() {} }, require: () => ({
+}).outputText, { exports: storeExports, console: { error() {} }, require: name => name === '../collections/tabs' ? tabsExports : ({
   pluginConfig: {
     async getAll() { configCalls++; if (configFails) throw Error('offline'); return { ...config }; },
     async set(key, value) { config[key] = value; },
@@ -111,6 +155,12 @@ await store.loadSettings();
 assert.equal(configCalls, 2, 'Settings load once after a failed attempt');
 assert.equal(store.readSetting('squares', false), true);
 assert.equal(store.readSetting('missing', 'fallback'), 'fallback');
+assert.deepEqual(JSON.parse(JSON.stringify(store.readSetting('tabs_order', []))), ['hero', 'manage', 'collections', 'icon']);
+assert.deepEqual(config.tabs_order, ['hero', 'manage', 'icon'], 'Reading the extended order does not rewrite saved settings');
+assert.deepEqual(store.readSetting('tabs_hidden', []), ['hero']);
+assert.equal(store.readSetting('tab_default', 'grid_p'), 'icon');
+await store.writeSetting('tabs_order', ['collections', 'manage', 'hero']);
+assert.deepEqual(store.readSetting('tabs_order', []), ['collections', 'manage', 'hero'], 'A reordered Collections tab stays where the user put it');
 const changes = [];
 const stop = store.onSettingChanged((key, value) => changes.push([key, value]));
 await store.writeSetting('hide_authors', true);

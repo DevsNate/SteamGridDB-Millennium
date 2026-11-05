@@ -6,6 +6,8 @@
 @use 'modals/gameselect';
 @use 'modals/logo_position';
 @use 'modals/official_assets';
+@use 'collections'; // Millennium
+@use 'details-actions'; // Millennium
 
 #sgdb-wrap {
   --asset-size: 120px;
@@ -121,6 +123,7 @@
   .sgdb-asset-toolbar {
     display: flex;
     width: 100%;
+    margin-top: 10px; // Millennium: room for the focus ring below the tabs
     gap: var(--gpSpace-Gap, .6em);
     // background-color: var(--gpSystemDarkestGrey, variables.$color-toolbar-bg);
     .filter-buttons {

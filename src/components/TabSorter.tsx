@@ -21,8 +21,9 @@ import { tabStrs, DEFAULT_TABS } from '../constants';
 import useSettings from '../hooks/useSettings';
 import t from '../utils/i18n';
 
+// Millennium: Collections and Manage are page tabs, not artwork types.
 type TabEntryData = {
-  type: SGDBAssetType,
+  type: SGDBTabType,
 }
 
 const buttonStyle = {
@@ -37,8 +38,8 @@ const buttonStyle = {
 
 const Interactables: FC<{
   entry: ReorderableEntry<TabEntryData>,
-  defaultTab: SGDBAssetType | null,
-  hiddenTabs: (SGDBAssetType | undefined)[] | null,
+  defaultTab: SGDBTabType | null,
+  hiddenTabs: (SGDBTabType | undefined)[] | null,
   onDefaultClick: (entry: ReorderableEntry<TabEntryData>) => void,
   onHideClick: (entry: ReorderableEntry<TabEntryData>) => void,
   onMove?: (entry: ReorderableEntry<TabEntryData>, offset: number) => void, // Millennium: Desktop only.
@@ -117,9 +118,9 @@ const Interactables: FC<{
 
 const TabSorter = () => {
   const { set, get } = useSettings();
-  const [defaultTab, setDefaultTab] = useState<SGDBAssetType | null>(null);
-  const [hiddenTabs, setHiddenTabs] = useState<SGDBAssetType[] | null>(null);
-  const [tabPositions, setTabPositions] = useState<SGDBAssetType[] | null>(null);
+  const [defaultTab, setDefaultTab] = useState<SGDBTabType | null>(null);
+  const [hiddenTabs, setHiddenTabs] = useState<SGDBTabType[] | null>(null);
+  const [tabPositions, setTabPositions] = useState<SGDBTabType[] | null>(null);
   const fieldRef = useRef<HTMLDivElement>(null);
   const once = useRef(false);
   // Millennium: The list reorders with the D-pad only, and a click toggles reorder mode. On the desktop that leaves
@@ -136,6 +137,9 @@ const TabSorter = () => {
         <Marquee
           style={{
             maxWidth: '340px',
+            // Millennium: On the desktop the label's width follows its content, so a scrolling name widens the
+            // label until it fits and stops scrolling, then narrows again. Some themes make that loop endlessly.
+            ...(desktop ? { width: '9em' } : {}),
             opacity: hiddenTabs.includes(type) ? .5 : 1,
           }}
         >
@@ -145,13 +149,13 @@ const TabSorter = () => {
       data: { type },
       position: i,
     }));
-  }, [tabPositions, hiddenTabs]);
+  }, [tabPositions, hiddenTabs, desktop]);
 
   const handleSave = (entries: ReorderableEntry<TabEntryData>[]) => {
     log('tab list', entries);
     const sortedTabs = entries.map((entry: ReorderableEntry<TabEntryData>) => entry.data?.type);
     set('tabs_order', sortedTabs, true);
-    setTabPositions(sortedTabs as SGDBAssetType[]);
+    setTabPositions(sortedTabs as SGDBTabType[]);
   };
 
   // Millennium: The desktop's move buttons.
@@ -192,8 +196,8 @@ const TabSorter = () => {
 
   useEffect(() => {
     (async () => {
-      const positions: SGDBAssetType[] = await get('tabs_order', DEFAULT_TABS);
-      const hidden: SGDBAssetType[] = await get('tabs_hidden', []);
+      const positions: SGDBTabType[] = await get('tabs_order', DEFAULT_TABS);
+      const hidden: SGDBTabType[] = await get('tabs_hidden', []);
       let tabDefault = await get('tab_default', 'grid_p');
       const filtered = positions.filter((x) => !hidden.includes(x));
       setTabPositions(positions);

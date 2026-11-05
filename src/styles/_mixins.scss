@@ -196,7 +196,7 @@
         gap: .3em;
         border-radius: 0 5px 5px 0;
         transition: transform variables.$easeOutCubic 300ms;
-        will-change: transform;
+        // Millennium: No will-change here. Its permanent layer left the focused tile's image visibly softer.
         @for $i from 1 through 5 {
           &:nth-child(#{$i}n) {
             transition-delay: #{$i * 100 * 1.2}ms;

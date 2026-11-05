@@ -101,11 +101,9 @@ const getApiParams = (assetType: SGDBAssetType, filters: any, page: number) => {
 
 export const SGDBContext = createContext({});
 
-export const SGDBProvider: FC<{ children: ReactNode }> = ({ children }) => {
-  const [appId, setAppId] = useState<number>(0);
-  const [appOverview, setAppOverview] = useState<AppStoreAppOverview | null>(null);
-
-  const clearAsset: SGDBContextType['clearAsset'] = useCallback(async (assetType) => {
+// Millennium: Collections writes to an explicit app, so these take their target instead of the provider's state.
+export const artworkWriter = (appId: number, appOverview: AppStoreAppOverview | null) => {
+  const clearAsset: SGDBContextType['clearAsset'] = async (assetType) => {
     assetType = getAmbiguousAssetType(assetType);
     if (assetType === ASSET_TYPE.icon) {
       if (appOverview?.BIsShortcut()) {
@@ -128,9 +126,9 @@ export const SGDBProvider: FC<{ children: ReactNode }> = ({ children }) => {
       // ClearCustomArtworkForApp() resolves instantly instead of after clearing, so we need to wait a bit.
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
-  }, [appId, appOverview]);
+  };
 
-  const changeAsset: SGDBContextType['changeAsset'] = useCallback(async (data, assetType) => {
+  const changeAsset: SGDBContextType['changeAsset'] = async (data, assetType) => {
     assetType = getAmbiguousAssetType(assetType);
     try {
       await clearAsset(assetType);
@@ -149,57 +147,18 @@ export const SGDBProvider: FC<{ children: ReactNode }> = ({ children }) => {
       // Millennium: Let callers report failed writes instead of showing a false success.
       throw error;
     }
-  }, [appId, appOverview, clearAsset]);
+  };
 
-  const apiRequest = useCallback((url: string, signal?: AbortSignal): Promise<any[]> => {
-    return new Promise((resolve, reject) => {
-      if (signal?.aborted) return reject(new DOMException('Aborted', 'AbortError'));
-
-      const abortHandler = () => {
-        reject(new DOMException('Aborted', 'AbortError'));
-      };
-
-      signal?.addEventListener('abort', abortHandler);
-      fetchNoCors(`${SGDB_API_BASE}${url}`, {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json',
-          // Millennium: Our backend adds the user's key.
-        },
-      }).then((res) => {
-        log(res);
-        if (res.status !== 200 && res.status >= 500) {
-          return reject(new Error('SGDB API request failed'));
-        }
-
-        try {
-          res.json().then((assetRes) => {
-            if (!assetRes.success) {
-              const apiErr = new Error(assetRes.errors.join(', '));
-              (apiErr as any).status = res.status;
-              return reject(apiErr);
-            }
-            return resolve(assetRes.data);
-          });
-        } catch (err: any) {
-          return reject(new Error(err.message));
-        }
-      }).finally(() => {
-        signal?.removeEventListener('abort', abortHandler);
-      });
-    });
-  }, []);
-
-  const getImageAsB64 = useCallback(async (location: string, path = false) : Promise<string | null> => {
+  const getImageAsB64 = async (location: string, path = false) : Promise<string | null> => {
     log('downloading', location);
     try {
       return await call<[path: string], string>(path ? 'read_file_as_base64' : 'download_as_base64', location);
     } catch (error) {
       return null;
     }
-  }, []);
+  };
 
-  const changeAssetFromUrl: SGDBContextType['changeAssetFromUrl'] = useCallback(async (url, assetType, path = false) => {
+  const changeAssetFromUrl: SGDBContextType['changeAssetFromUrl'] = async (url, assetType, path = false) => {
     assetType = getAmbiguousAssetType(assetType);
     if (assetType === ASSET_TYPE.icon) {
       if (appOverview?.BIsShortcut()) {
@@ -245,7 +204,58 @@ export const SGDBProvider: FC<{ children: ReactNode }> = ({ children }) => {
       }
       await changeAsset(data, assetType);
     }
-  }, [appId, appOverview, changeAsset, getImageAsB64]);
+  };
+
+  return { clearAsset, changeAsset, changeAssetFromUrl };
+};
+
+export const SGDBProvider: FC<{ children: ReactNode }> = ({ children }) => {
+  const [appId, setAppId] = useState<number>(0);
+  const [appOverview, setAppOverview] = useState<AppStoreAppOverview | null>(null);
+
+  // Millennium: The bodies moved to artworkWriter, which Collections also uses.
+  const { clearAsset, changeAsset, changeAssetFromUrl } = useMemo(
+    () => artworkWriter(appId, appOverview), [appId, appOverview]);
+
+  const apiRequest = useCallback((url: string, signal?: AbortSignal): Promise<any[]> => {
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) return reject(new DOMException('Aborted', 'AbortError'));
+
+      const abortHandler = () => {
+        reject(new DOMException('Aborted', 'AbortError'));
+      };
+
+      signal?.addEventListener('abort', abortHandler);
+      fetchNoCors(`${SGDB_API_BASE}${url}`, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          // Millennium: Our backend adds the user's key.
+        },
+      }).then((res) => {
+        log(res);
+        if (res.status !== 200 && res.status >= 500) {
+          return reject(new Error('SGDB API request failed'));
+        }
+
+        try {
+          res.json().then((assetRes) => {
+            if (!assetRes.success) {
+              const apiErr = new Error(assetRes.errors.join(', '));
+              (apiErr as any).status = res.status;
+              return reject(apiErr);
+            }
+            return resolve(assetRes.data);
+          });
+        } catch (err: any) {
+          return reject(new Error(err.message));
+        }
+      // Millennium: A failed backend call must end the request instead of leaving it pending.
+      }).catch(reject).finally(() => {
+        signal?.removeEventListener('abort', abortHandler);
+      });
+    });
+  }, []);
 
   const searchGames = useCallback(async (term: string) => {
     try {

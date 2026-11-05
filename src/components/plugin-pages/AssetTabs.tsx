@@ -9,6 +9,9 @@ import { tabStrs, DEFAULT_TABS } from '../../constants';
 import useSettings from '../../hooks/useSettings';
 import BeggingModal from '../../modals/BeggingModal';
 
+// Millennium: The collection browser uses the same native tabs and page window.
+import { CollectionsTab } from '../../../frontend/collections/collections-tab';
+import { useFlowTabs, useHeaderBack } from '../../../frontend/collections/flow-tabs';
 import ManageTab from './ManageTab';
 import AssetTab from './AssetTab';
 
@@ -21,6 +24,9 @@ const AssetTabs: FC<{
   const { openFilters } = useAssetSearch();
   const [tabPositions, setTabPositions] = useState<string[] | null>(null);
   const [hiddenTabs, setHiddenTabs] = useState<string[] | null>(null);
+  // Millennium: While applying a collection, the bar shows that flow's steps.
+  const flow = useFlowTabs(currentTab === 'collections');
+  const headerBack = useHeaderBack(currentTab === 'collections');
 
   useEffect(() => {
     (async () => {
@@ -39,6 +45,8 @@ const AssetTabs: FC<{
   }, [get, set]);
 
   if (!tabPositions || !hiddenTabs) return null;
+
+  if (flow) return <Tabs autoFocusContents {...flow} />;
 
   let tabs = [
     ...tabPositions
@@ -67,7 +75,11 @@ const AssetTabs: FC<{
       autoFocusContents
       activeTab={currentTab}
       onShowTab={onShowTab}
+      onCancelFromTabHeader={headerBack}
       tabs={tabs.map((type) => {
+        if (type === 'collections') {
+          return { id: type, title: tabStrs[type], content: <CollectionsTab /> };
+        }
         if (type === 'manage') {
           return {
             title: tabStrs[type],

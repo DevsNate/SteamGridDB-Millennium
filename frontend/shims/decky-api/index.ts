@@ -119,7 +119,13 @@ export async function fetchNoCors(url: string, init: RequestInit = {}): Promise<
   init.signal?.throwIfAborted();
   const reply = await sgdbRequest({ path: target.pathname.slice('/api/v2'.length) + target.search });
   init.signal?.throwIfAborted();
-  const result = reply ? decodeResponse<unknown>(reply) : { success: false, errors: ['SteamGridDB returned an empty response.'] };
+  let result: { success: boolean; errors?: string[] };
+  try {
+    result = decodeResponse<unknown>(reply);
+  } catch (error) {
+    // Upstream reads failures from the envelope, so an unreadable reply becomes one too.
+    result = { success: false, errors: [error instanceof Error ? error.message : String(error)] };
+  }
   if ((result as { key_rejected?: unknown }).key_rejected === true) notifyApiKeyRejected();
   const body = typeof reply === 'string' ? reply : JSON.stringify(result);
   const ok = result.success === true;

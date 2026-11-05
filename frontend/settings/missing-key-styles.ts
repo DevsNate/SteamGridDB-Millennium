@@ -28,4 +28,12 @@ export const setupStyles = `
   padding: 24px 36px;
   box-sizing: border-box;
 }
+
+/* Steam's own highlight skips the key field. */
+.sgdbApiKeySetup .sgdb-key-focus input {
+  outline: 2px solid #fff;
+  outline-offset: -2px;
+}
+
+.sgdbApiKeySetup .sgdbApiKeyError { color: #ffb3b3; padding-top: 8px; }
 `;

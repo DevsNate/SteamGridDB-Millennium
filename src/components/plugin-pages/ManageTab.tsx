@@ -1,6 +1,6 @@
 import { FC, useState, useEffect, useRef } from 'react';
 // Millennium: Report Manage action failures through the same toast integration as asset tabs.
-import { call, toaster } from '@decky/api';
+import { toaster } from '@decky/api';
 import {
   DialogButton,
   Focusable,
@@ -18,6 +18,9 @@ import openFilePicker from '../../utils/openFilePicker';
 import LogoPositionerModal from '../../modals/LogoPositionerModal';
 // Millennium: Match the asset-tab error notification icon.
 import MenuIcon from '../Icons/MenuIcon';
+// Millennium: Adding the artwork a game shows to a collection.
+import { addAssetToCollection, appliedArtwork, forgetArtwork } from '../../../frontend/services/backend';
+import { ownCollections, showCollectionMenu } from '../../../frontend/details-actions';
 
 const AssetBlock: FC<{
   app: AppStoreAppOverview,
@@ -29,6 +32,8 @@ const AssetBlock: FC<{
   const [overview, setOverview] = useState<AppStoreAppOverview | null>(app);
   const innerFocusRef = useRef<HTMLDivElement>(null);
   const refreshing = useRef(false);
+  // Millennium: The SteamGridDB artwork this game shows, if we applied it and it's still there.
+  const [artworkId, setArtworkId] = useState(0);
 
   const refreshOverview = async () => {
     if (refreshing.current) return;
@@ -55,6 +60,15 @@ const AssetBlock: FC<{
     if (isShortcutIcon && !isShortcutIconLoaded) refreshOverview();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isShortcutIcon, isShortcutIconLoaded]);
+
+  // Millennium: Changes along with the image, so follow every change the same way.
+  useEffect(() => {
+    if (!overview || !editable) return undefined;
+    let current = true;
+    appliedArtwork(app.appid, assetType).then((id) => { if (current) setArtworkId(id); }, () => { if (current) setArtworkId(0); });
+    return () => { current = false; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [overview, editable]);
 
   // Millennium: Catch write and picker errors without treating cancellation as a failure.
   const runAction = async (action: () => Promise<void>) => {
@@ -89,7 +103,29 @@ const AssetBlock: FC<{
 
   const handleClear = () => runAction(async () => {
     await clearAsset(assetType);
+    // Millennium: Clearing a shortcut's icon leaves its file behind.
+    await forgetArtwork(app.appid, assetType);
   });
+
+  // Millennium: The same choice as the Details dialog.
+  const addToCollection = async () => {
+    const report = (body: string, failed: boolean) => toaster.toast({
+      title: 'SteamGridDB',
+      body,
+      icon: <MenuIcon fill={failed ? '#f3171e' : undefined} />,
+    });
+    const reportFailure = (error: unknown) => report(error instanceof Error ? error.message : String(error), true);
+    try {
+      const collections = await ownCollections();
+      if (!innerFocusRef.current) return;
+      showCollectionMenu(collections, innerFocusRef.current, (collection) => {
+        addAssetToCollection(collection.id, { id: artworkId }, assetType)
+          .then(() => report(`Added to ${collection.name}.`, false), reportFailure);
+      });
+    } catch (error) {
+      reportFailure(error);
+    }
+  };
 
   return (
     <div className={joinClassNames('asset-wrap', `asset-wrap-${assetType}`)}>
@@ -102,8 +138,20 @@ const AssetBlock: FC<{
       >
         {editable && (
           <Focusable flow-children="right" className="action-overlay">
+            {artworkId > 0 && (
+              <Focusable
+                ref={innerFocusRef}
+                noFocusRing
+                className="action-button"
+                onActivate={addToCollection}
+                onOKActionDescription="Add to Collection"
+              >
+                <MenuIcon />
+              </Focusable>
+            )}
             <Focusable
-              ref={innerFocusRef}
+              // Millennium: Selecting the image starts at the first button.
+              ref={artworkId > 0 ? undefined : innerFocusRef}
               noFocusRing
               className="action-button"
               onActivate={handleClear}

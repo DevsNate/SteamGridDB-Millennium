@@ -13,11 +13,12 @@ import t from '../../utils/i18n';
 import useSettings from '../../hooks/useSettings';
 import useAssetSearch from '../../hooks/useAssetSearch';
 import { SGDB_ASSET_TYPE_READABLE } from '../../constants';
+import { keepColumn } from '../../../frontend/collections/nav';
 
 // Millennium: Every tab sizes by items per row (upstream does this for hero
 // and logo only), with ranges for large desktop and TV displays. Values map
 // to columns as max - value + min, so moving right means fewer, bigger items.
-const sliderProps = {
+export const sliderProps = {
   grid_p: {
     min: 3,
     max: 14,
@@ -56,8 +57,8 @@ const sliderProps = {
 };
 
 // Millennium: Defaults in the same items-per-row scale: 8 capsules, 5 wide
-// capsules, 4 heroes, 8 logos, 10 icons per row.
-const defaultSliderSizes = {
+// capsules, 4 heroes, 8 logos, 10 icons per row. Collections sizes its grids the same way.
+export const defaultSliderSizes = {
   grid_p: 9,
   grid_l: 7,
   hero: 3,
@@ -140,8 +141,8 @@ const Toolbar = forwardRef(({
   if (disabled) return null;
 
   return (
-    <Focusable className="sgdb-asset-toolbar" noFocusRing={noFocusRing} flow-children="row">
-      <Focusable className="filter-buttons">
+    <Focusable className="sgdb-asset-toolbar" noFocusRing={noFocusRing} flow-children="row" {...keepColumn}>
+      <Focusable className="filter-buttons" {...keepColumn}>
         <DialogButton
           ref={toolbarFocusRef}
           style={{ flex: 0 }}

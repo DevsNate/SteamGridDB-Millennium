@@ -12,10 +12,10 @@ export const libraryPreviewStyles = () => `
     background: url('${defaultAppImageDataUrl}') center center / cover !important;
   }
 
-  /* The same missing image leaves other tiles empty, so give them a solid
+  /* Upstream's grey image would hide the shimmer on other tiles, so give them a solid
      base and a soft shimmer until their artwork arrives. */
   #sgdb-wrap .image-wrap {
-    background-color: #1b2530 !important;
+    background: #1b2530 !important;
   }
 
   #sgdb-wrap .image-wrap > .thumb[data-media-loading="true"] {

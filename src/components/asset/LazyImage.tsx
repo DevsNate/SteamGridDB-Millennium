@@ -161,23 +161,23 @@ export const LazyImage: FC<LazyImage> = ({
     let observer: IntersectionObserver;
     const observe = () => {
       observer?.disconnect();
-      // Millennium: Preload owned scroll viewports above/below at first intersection: four for images, since uncached art can take half a second or more to arrive, and one for heavier video.
+      // Millennium: Preload images four owned scroll viewports above/below at first intersection, since uncached art can take half a second or more to arrive. Video keeps upstream's rule: starting off-screen videos as a page opens risks the freeze described above.
       const rootHeight = scrollContainer && 'clientHeight' in scrollContainer ? scrollContainer.clientHeight : owner.innerHeight;
-      const margin = Math.max(1, (rootHeight || owner.innerHeight) * (isVideo ? 1 : 4), parseFloat(marginOffset ?? '') || 0);
+      const margin = Math.max(1, isVideo ? 0 : (rootHeight || owner.innerHeight) * 4, parseFloat(marginOffset ?? '') || 0);
 
       observer = new owner.IntersectionObserver((entries, observer) => {
       entries.forEach((entry) => {
-        if (entry.isIntersecting) { // Millennium: Do not wait until half a tile is visible.
+        if (entry.isIntersecting && (!isVideo || entry.intersectionRatio >= .5)) { // Millennium: Images do not wait until half a tile is visible.
           setInViewport(true);
           if (!unloadVideo) { // Millennium: Keep static images and their loaded/fade state.
             observer.unobserve(entry.target);
           }
-        } else if (unloadVideo) { // Millennium: Unload only video outside the preload region, including pending downloads.
+        } else if (unloadVideo && !entry.isIntersecting) { // Millennium: Unload only video outside the preload region, including pending downloads.
           setInViewport(false);
           setLoading(true);
         }
       });
-      }, { threshold: 0, rootMargin: `${margin}px 0px`, root: scrollContainer }); // Millennium: Owner-sized lookahead.
+      }, { threshold: isVideo ? [.5, 0] : 0, rootMargin: `${margin}px 0px`, root: scrollContainer }); // Millennium: Owner-sized lookahead for images.
 
       observer.observe(node);
     };

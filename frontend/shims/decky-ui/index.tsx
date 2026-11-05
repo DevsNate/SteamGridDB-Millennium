@@ -81,7 +81,7 @@ export type {
 } from 'millennium';
 // Millennium: Preserve Decky's route hook signature while using the working Steam hook.
 export const useParams = useRouteParams as typeof ClientUseParams;
-export type TabsProps = ClientTabsProps;
+export type TabsProps = ClientTabsProps & { onCancelFromTabHeader?(): void; wrapAround?: boolean };
 
 // Millennium: Decky's checkbox props reserve onSelect for consumer callbacks, not DOM selection events.
 export type DialogCheckboxProps = Omit<ClientDialogCheckboxProps, 'onSelect'>;

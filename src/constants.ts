@@ -118,13 +118,15 @@ export const DIMENSIONS = {
 };
 
 // Sometimes tabs needs different translation strings
-export const tabStrs: Record<SGDBAssetType | 'manage', string> = {
+// Millennium: Include the collection browser without treating it as an artwork type.
+export const tabStrs: Record<SGDBTabType, string> = {
   grid_p: t('LABEL_TAB_CAPSULE', 'Capsule'),
   grid_l: t('LABEL_TAB_WIDECAPSULE', 'Wide Capsule'),
   hero: t('LABEL_TAB_HERO', 'Hero'),
   logo: t('LABEL_TAB_LOGO', 'Logo'),
   icon: t('LABEL_TAB_ICON', 'Icon'),
   manage: t('LABEL_TAB_MANAGE', 'Manage'),
+  collections: 'Collections', // Millennium: Our collection browser.
 };
 
 // Default tab order

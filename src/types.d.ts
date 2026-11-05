@@ -25,6 +25,9 @@ declare module '*.webm' {
 
 type eAssetType = 0 | 1 | 2 | 3 | 4;
 
+// Millennium: Page tabs include views that are not artwork types.
+type SGDBTabType = SGDBAssetType | 'manage' | 'collections';
+
 type SGDBAssetType = 'grid_p' | 'grid_l' | 'hero' | 'logo' | 'icon';
 
 type LogoPinPositions = 'BottomLeft' | 'UpperLeft' | 'CenterCenter' | 'UpperCenter' | 'BottomCenter';

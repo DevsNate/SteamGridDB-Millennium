@@ -54,18 +54,19 @@ const DetailsModal: FC<{
           <span className="meta">
             {[
               SGDB_MIME_MAP[asset.mime] || asset.mime,
-              asset.style.replace(/_/g, ' '),
+              asset.style?.replace(/_/g, ' '), // Millennium: Collection artwork can lack a style.
               asset.width > 0 ? `${asset.width}×${asset.height}` : undefined,
             ].filter(Boolean).join(' • ')}
           </span>
-          <Focusable className="author" onActivate={() => {
+          {/* Millennium: Collection artwork can lack an author. */}
+          {asset.author && <Focusable className="author" onActivate={() => {
             Navigation.NavigateToExternalWeb(`https://steamcommunity.com/profiles/${asset.author.steam64}`);
             closeModal?.();
           }}
           >
             <img src={asset.author.avatar} alt="" />
             <span>{asset.author.name}</span>
-          </Focusable>
+          </Focusable>}
           {asset.notes && (
             <Markdown
               onLinkClick={closeModal}

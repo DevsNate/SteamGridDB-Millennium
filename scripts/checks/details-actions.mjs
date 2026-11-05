@@ -40,8 +40,11 @@ const imports = {
   },
   './steam/open-web-link': { openWebLink: async url => { navigationOrder.push('navigate'); links.push(url); } },
   './settings/plugins-hub-link': { PluginsHubLink: 'hublink' },
+  './settings/key-rejected': { requestApiKeySetup: rejected => { setupRequests.push(rejected); return true; } },
 };
-const actions = evaluate('../../frontend/details-actions.tsx', imports, { SteamClient: { UI: { GetUIMode: async () => mode } } });
+const setupRequests = [];
+const pageWindow = { PLUGIN_LIST: { 'plugins-hub': {} } };
+const actions = evaluate('../../frontend/details-actions.tsx', imports, { SteamClient: { UI: { GetUIMode: async () => mode } }, window: pageWindow });
 const asset = { id: 99 };
 const visit = (tree, test) => {
   if (!tree || typeof tree !== 'object') return;
@@ -76,6 +79,14 @@ const hubLink = visit(render(), node => node.type === 'hublink');
 assert.ok(hubLink, 'The Big Picture hint links Plugins Hub');
 hubLink.props.closeModal();
 assert.equal(navigationOrder.pop(), 'close', 'The Plugins Hub link closes Details, or the dialog stays above the web page');
+// Without Plugins Hub, Big Picture closes Details and the artwork page shows its own Key setup.
+delete pageWindow.PLUGIN_LIST['plugins-hub'];
+await click('Add to collection');
+await click('Open settings');
+assert.deepEqual(hubTabs, [998], 'No jump to a Quick Access tab that is not there');
+assert.deepEqual(setupRequests, [false]);
+assert.equal(navigationOrder.pop(), 'close');
+pageWindow.PLUGIN_LIST['plugins-hub'] = {};
 configured = true;
 await click('Add to collection');
 assert.ok(menu);

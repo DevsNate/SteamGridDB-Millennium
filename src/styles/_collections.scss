@@ -1,0 +1,176 @@
+// Millennium: The Collections tab. Pages reuse #images-container and .sgdb-asset-toolbar from the artwork
+// tabs; this only adds what they don't have.
+
+.sgdb-collection-bar {
+  margin-top: 1em;
+  &[data-back] { cursor: pointer; }
+}
+
+// A tile in the artwork grid, with its label underneath.
+.sgdb-collection-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  &[data-selected] .image-wrap { outline: 3px solid #fff; outline-offset: 2px; }
+  &[data-selected] .image-wrap::after {
+    content: '✓';
+    position: absolute;
+    top: .4em;
+    left: .4em;
+    z-index: 4;
+    width: 1.5em;
+    line-height: 1.5em;
+    text-align: center;
+    border-radius: 50%;
+    color: #0e141b;
+    background: #fff;
+    font-weight: bold;
+  }
+  &[data-dimmed] .image-wrap > .thumb { opacity: .4; }
+}
+// A game with no capsule shows its other artwork centred in the capsule-shaped tile, over a blurred copy.
+// Scoped like the grid's own rules in style.scss so these win.
+// The blurred copy sits inside the tile here, not behind it as the grid's glow.
+#sgdb-wrap #images-container .sgdb-collection-tile[data-letterbox] .image-wrap > .thumb {
+  overflow: hidden;
+  img, video { margin: auto 0; }
+  img.blur-bg {
+    width: 100%;
+    height: 100%;
+    max-height: none;
+    object-fit: cover;
+    z-index: 0;
+    filter: blur(16px) brightness(.55) saturate(1.4);
+    transform: scale(1.15);
+    &[data-loaded="true"] { opacity: 1; }
+  }
+}
+.sgdb-collection-tile-name,
+.sgdb-collection-tile-text {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.sgdb-collection-tile-name { font-size: .8em; padding-top: .4em; }
+.sgdb-collection-tile-text { font-size: .65em; opacity: .65; }
+
+// A collection's tile: a strip of its artwork at the height of a wide capsule.
+.sgdb-collection-strip {
+  padding-bottom: 46.7%;
+  > div {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    gap: 2px;
+    overflow: hidden;
+  }
+  .sgdb-collection-media { min-width: 0; min-height: 0; overflow: hidden; }
+  .sgdb-collection-media :is(img, video) { width: 100%; height: 100%; object-fit: cover; }
+}
+.sgdb-collection-media { display: flex; align-items: center; justify-content: center; }
+.sgdb-collection-media-missing > svg { width: 32px; height: 32px; opacity: .5; }
+
+.sgdb-collection-more { grid-column: 1 / -1; }
+#images-container > .sgdb-collection-message { grid-column: 1 / -1; justify-self: center; }
+.sgdb-collection-message { margin-top: 1em; text-align: center; font-size: .85em; opacity: .75; overflow-wrap: anywhere; }
+
+// Artwork types on a game's page.
+.sgdb-collection-types {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: .5em;
+  margin-top: 1em;
+  > button { flex: 0 0 auto; width: auto; min-width: 0; padding: .3em 1.2em; }
+  > [aria-pressed="true"] { color: #0e141b; background: #fff; }
+}
+
+// Dialogs and the review page
+.sgdb-collection-dialog {
+  width: min(720px, 90vw);
+  .DialogBody.sgdb-collection-scroll { max-height: 60vh; overflow: auto; padding: 4px; }
+}
+// In the toolbar, on the same panel as the size slider.
+.filter-buttons:has(.sgdb-collection-replace) { flex: 1.5; min-width: 0; }
+.sgdb-collection-replace {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  > * {
+    box-sizing: border-box;
+    height: var(--sgdb-toolbar-height, 44px);
+    min-height: 0;
+    background: #23262e !important;
+    border-radius: 3px;
+    padding: 0 16px !important;
+  }
+  > .gpfocus { background: #3d4450 !important; }
+  // Steam centers the label's column but lets the toggle's stretch, which leaves the toggle at the top of the row.
+  .FieldRightColumn { align-self: center; }
+}
+.sgdb-collection-apply {
+  display: flex;
+  justify-content: center;
+  margin-top: 1em;
+  > button { flex: 0 0 auto; width: auto; min-width: 280px; }
+}
+.sgdb-collection-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: .6em;
+  margin: .5em 0;
+  > button { flex: 0 0 auto; width: auto; min-width: 0; padding-left: 1.5em; padding-right: 1.5em; }
+  > :not(button) { flex: 1 1 auto; }
+}
+.sgdb-collection-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .25em 1.5em;
+  margin-top: 1em;
+  > * { margin: 0; }
+}
+.sgdb-collection-section {
+  margin-top: 1.25em;
+  h3 { flex: 1 1 auto; margin: 0; font-size: .85em; font-weight: 500; opacity: .8; }
+  h3 span { font-weight: 400; opacity: .75; }
+}
+// The review has several grids, and its last section may have none, so the footer's room belongs to the page.
+#sgdb-wrap .sgdb-collection-review {
+  padding-bottom: var(--gamepadui-current-footer-height);
+  #images-container { padding-bottom: 0; }
+}
+.sgdb-collection-section-head {
+  display: flex;
+  align-items: center;
+  gap: .6em;
+  margin-bottom: .5em;
+  > button { flex: 0 0 auto; width: auto; min-width: 0; padding: .3em 1.5em; }
+}
+// Shown on the tile in focus. Steam moves focus to the tile under the mouse too.
+.sgdb-collection-exclude {
+  display: none;
+  position: absolute;
+  top: .4em;
+  right: .4em;
+  z-index: 5;
+  align-items: center;
+  gap: .3em;
+  padding: .15em .5em .15em .25em;
+  border-radius: 3px;
+  background: rgba(14, 20, 27, .85);
+  font-size: .7em;
+  cursor: pointer;
+  img { width: auto; height: 16px; } // The size Steam gives glyphs in its filter bars.
+}
+.sgdb-collection-tile:has(.gpfocus) .sgdb-collection-exclude { display: flex; }
+.sgdb-collection-library-results {
+  display: flex;
+  flex-direction: column;
+  gap: .4em;
+  margin: 1em 0;
+  > button { text-align: left; white-space: normal; }
+}
+.sgdb-collection-kind { opacity: .65; font-size: .8em; margin-left: 1em; }

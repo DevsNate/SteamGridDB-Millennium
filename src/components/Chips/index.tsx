@@ -41,8 +41,16 @@ const Chips: FC<{ children: ReactNode }> = ({ children }) => {
     }
     // Inital
     setLeftAlign(isCutOff());
+    // Millennium: A tile can mount before it's in its final place, which picks the wrong side for good. Chips only
+    // slide out for the tile in focus or under the mouse, so check again then.
+    const measure = () => setLeftAlign(isCutOff());
+    const tile = el.parentElement;
+    tile?.addEventListener('focusin', measure);
+    tile?.addEventListener('mouseenter', measure);
     return () => {
       observer.disconnect();
+      tile?.removeEventListener('focusin', measure);
+      tile?.removeEventListener('mouseenter', measure);
     };
   }, [isCutOff]);
 

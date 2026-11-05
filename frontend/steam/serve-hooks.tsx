@@ -1,8 +1,9 @@
 import { MenuItem } from 'millennium';
 import { attachLibraryStyles } from '../library/styles';
-import { getSteamBigPictureWindow } from './windows';
+import { BIG_PICTURE_POPUP, getSteamBigPictureWindow } from './windows';
 
-const BIG_PICTURE_POPUP = /^SP BPM(_uid\d+)?$/;
+// Steam's EPopupCreationFlags.Resizable.
+const POPUP_RESIZABLE = 16;
 const POPOUT_NAME = 'SteamGridDB';
 const POPOUT_RESTORE_KEY = 'SteamGridDBDesktopPopout';
 
@@ -23,7 +24,7 @@ export const popupParams = (name: string, params: any) => {
     const saved = (globalThis as any).g_PopupManager?.GetRestoreDetails?.(POPOUT_RESTORE_KEY) || undefined;
     return {
       ...params,
-      eCreationFlags: (params?.eCreationFlags ?? 0) | 16,
+      eCreationFlags: (params?.eCreationFlags ?? 0) | POPUP_RESIZABLE,
       strRestoreDetails: params?.strRestoreDetails ?? saved,
       center_on_window: saved ? undefined : params?.center_on_window,
     };

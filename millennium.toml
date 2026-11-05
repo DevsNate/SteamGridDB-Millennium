@@ -1,9 +1,9 @@
 [plugin]
 id = "steamgriddb"
 name = "SteamGridDB"
-version = "1.0"
+version = "1.1"
 author = "DevsNate"
-description = "A SteamGridDB plugin for Millennium to apply and manage custom art assets from within Steam."
+description = "Browse and apply SteamGridDB artwork, or restyle your whole library with a SteamGridDB collection, in Big Picture and on the Steam desktop."
 
 [assets]
 resources = ["assets/*"]

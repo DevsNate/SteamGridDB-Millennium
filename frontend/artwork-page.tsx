@@ -17,7 +17,7 @@ export const UpstreamPage = ({ desktop = false }: { desktop?: boolean }) => {
   useEffect(() => {
     let cancelled = false;
     // A Key SteamGridDB rejects swaps the artwork for the setup view; Retry checks again.
-    const stopListening = onApiKeyRejected(() => { setRejected(true); setConfigured(false); });
+    const stopListening = onApiKeyRejected((keyRejected = true) => { setRejected(keyRejected); setConfigured(false); });
     // The bundled images must be ready before tiles render their spinners.
     void Promise.all([getApiKeyStatus(), loadPluginAssets()]).then(([result]) => {
       if (cancelled) return;
@@ -36,7 +36,7 @@ export const UpstreamPage = ({ desktop = false }: { desktop?: boolean }) => {
     </SettingsProvider> : <div className="sgdbRoot sgdbGamepad sgdbBigPicture sgdbPopoutContent" id="sgdb-wrap">
       <style>{setupStyles}</style>
       {/* The setup view stays until the check answers: an empty page would drop the focused Retry button and Steam's focus with it. */}
-      <MissingApiKeyView desktop={desktop} rejected={rejected} onRetry={() => setVersion(current => current + 1)} />
+      <MissingApiKeyView rejected={rejected} onRetry={() => setVersion(current => current + 1)} />
     </div>}
   </PageWindowBoundary>
   );
